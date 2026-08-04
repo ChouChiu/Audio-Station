@@ -1,0 +1,9 @@
+[wrap-git]
+directory = qt-fluent-widgets
+url = https://github.com/Fairy-Oracle-Sanctuary/Qt-Fluent-Widgets.git
+revision = 11db4f29728c96d5ad614964c9ea0748af7384e8
+depth = 1
+patch_directory = qt-fluent-widgets
+
+[provide]
+dependency_names = qtfluentwidgets

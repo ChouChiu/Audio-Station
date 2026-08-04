@@ -1,0 +1,8 @@
+/build*/
+/subprojects/qt-fluent-widgets/
+/subprojects/.wraplock
+/subprojects/packagecache/
+vocal-extractor/
+__pycache__/
+*.pyc
+*.egg-info/

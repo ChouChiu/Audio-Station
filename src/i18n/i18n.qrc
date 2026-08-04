@@ -1,0 +1,7 @@
+<RCC>
+    <qresource prefix="/i18n">
+        <file>zh_cn.json</file>
+        <file>ja_jp.json</file>
+        <file>ko_kr.json</file>
+    </qresource>
+</RCC>

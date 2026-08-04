@@ -1,0 +1,6 @@
+subdir('dsp')
+subdir('audio')
+subdir('i18n')
+subdir('core')
+subdir('ui')
+subdir('app')
