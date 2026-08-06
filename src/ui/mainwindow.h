@@ -25,12 +25,14 @@ public:
 
 protected:
     void closeEvent(QCloseEvent* e) override;
+    bool event(QEvent* e) override;
 
 private:
     // 查表 + {path}/{msg} 占位符替换
     QString t(const QString& key, const QString& path = QString(), const QString& msg = QString()) const;
     void initNavigation();
     void refreshAllText();
+    void applySystemAccent(); // 读取系统强调色 (QPalette::Highlight) 应用到 qfw 主题色
 
     void startProcessing();
     void startAiExtraction();

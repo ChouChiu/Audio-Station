@@ -1,7 +1,10 @@
 #include "mainwindow.h"
 
+#include <QApplication>
 #include <QCloseEvent>
+#include <QEvent>
 #include <QFileInfo>
+#include <QPalette>
 #include <QSettings>
 #include <QVBoxLayout>
 
@@ -41,6 +44,7 @@ MainWindow::MainWindow(QWidget* parent) : FluentWindow(parent) {
     setMinimumSize(780, 600);
 
     qfw::setTheme(themeFromKey(m_theme));
+    applySystemAccent();
     initNavigation();
     refreshAllText();
 }
@@ -114,6 +118,7 @@ void MainWindow::initNavigation() {
         m_theme = theme;
         QSettings().setValue(QStringLiteral("theme"), theme);
         qfw::setTheme(themeFromKey(theme));
+        applySystemAccent(); // 深/浅色切换后系统调色板可能变化, 重新同步强调色
     });
 }
 
@@ -127,6 +132,24 @@ void MainWindow::refreshAllText() {
         nav->setText(t(QStringLiteral("nav_ai")));
     if (auto* nav = qobject_cast<qfw::NavigationTreeWidget*>(m_settingsNav))
         nav->setText(t(QStringLiteral("nav_settings")));
+}
+
+void MainWindow::applySystemAccent() {
+    // Qt 平台主题把系统强调色暴露在 QPalette::Highlight (KDE/GNOME/Windows 均适用)
+    const QColor accent = QApplication::palette().color(QPalette::Highlight);
+    if (!accent.isValid())
+        return;
+    // 防御: 近灰/无效强调色不应用 (避免整套控件变灰)
+    if (accent.hsvSaturationF() < 0.08f)
+        return;
+    qfw::setThemeColor(accent, /*save=*/false, /*lazy=*/false);
+}
+
+bool MainWindow::event(QEvent* e) {
+    // 系统主题/配色切换时 (如 KDE 换配色方案) 重新读取强调色
+    if (e->type() == QEvent::ApplicationPaletteChange)
+        applySystemAccent();
+    return FluentWindow::event(e);
 }
 
 // ---- 处理管线 ----
