@@ -6,8 +6,11 @@
 #include <QVBoxLayout>
 
 #include "accompanimentfinder.h"
+#include "aipage.h"
 #include "filepaths.h"
 #include "homepage.h"
+#include "modelcatalog.h"
+#include "neuralpaths.h"
 #include "settingspage.h"
 #include "strtable.h"
 
@@ -55,18 +58,28 @@ void MainWindow::initNavigation() {
     m_homePage->setObjectName(QStringLiteral("homePage"));
     m_homeNav = addSubInterface(m_homePage, qfw::FluentIconEnum::Home, t(QStringLiteral("nav_home")));
 
+    m_aiPage = new AiPage(this);
+    m_aiPage->setObjectName(QStringLiteral("aiPage"));
+    m_aiNav = addSubInterface(m_aiPage, qfw::FluentIconEnum::MixVolumes,
+                              t(QStringLiteral("nav_ai")));
+
     m_settingsPage = new SettingsPage(this);
     m_settingsPage->setObjectName(QStringLiteral("settingsPage"));
     m_settingsNav = addSubInterface(m_settingsPage, qfw::FluentIconEnum::Settings,
                                     t(QStringLiteral("nav_settings")));
 
     m_homePage->setLanguage(m_lang);
+    m_aiPage->setLanguage(m_lang);
     m_settingsPage->setLanguage(m_lang);
     m_settingsPage->setLanguageSelection(m_lang);
     m_settingsPage->setThemeSelection(m_theme);
 
     connect(m_homePage, &HomePage::startRequested, this, &MainWindow::startProcessing);
     connect(m_homePage, &HomePage::cancelRequested, this, &MainWindow::cancelProcessing);
+    connect(m_aiPage, &AiPage::extractRequested, this, &MainWindow::startAiExtraction);
+    connect(m_aiPage, &AiPage::cancelRequested, this, &MainWindow::cancelProcessing);
+    connect(m_aiPage, &AiPage::modelChanged, this,
+            [this](const QString& id) { updateAiModelStatus(id); });
     connect(m_homePage, &HomePage::songChanged, this, [this](const QString&) {
         const QFileInfo info(m_homePage->songPath());
         m_homePage->setOutputPath(info.absolutePath() + QLatin1Char('/') + info.completeBaseName() +
@@ -78,6 +91,7 @@ void MainWindow::initNavigation() {
         if (enabled && !m_homePage->songPath().isEmpty())
             autoFindAccompaniment();
     });
+    updateAiModelStatus(m_aiPage->modelId());
     connect(m_settingsPage, &SettingsPage::languageChanged, this, [this](const QString& lang) {
         m_lang = lang;
         QSettings().setValue(QStringLiteral("lang"), lang);
@@ -96,6 +110,8 @@ void MainWindow::refreshAllText() {
     setWindowTitle(t(QStringLiteral("window_title")));
     if (auto* nav = qobject_cast<qfw::NavigationTreeWidget*>(m_homeNav))
         nav->setText(t(QStringLiteral("nav_home")));
+    if (auto* nav = qobject_cast<qfw::NavigationTreeWidget*>(m_aiNav))
+        nav->setText(t(QStringLiteral("nav_ai")));
     if (auto* nav = qobject_cast<qfw::NavigationTreeWidget*>(m_settingsNav))
         nav->setText(t(QStringLiteral("nav_settings")));
 }
@@ -171,12 +187,92 @@ void MainWindow::startProcessing() {
     thread->start();
 }
 
-void MainWindow::cancelProcessing() {
-    if (!m_thread)
+void MainWindow::startAiExtraction() {
+    if (m_thread || m_neuralThread)
         return;
-    if (m_thread->isRunning())
+
+    const auto warn = [this](const QString& key) {
+        qfw::InfoBar::warning(t(QStringLiteral("warn_title")), t(key), Qt::Horizontal, true, 3000,
+                              qfw::InfoBarPosition::TopRight, this);
+    };
+    if (m_aiPage->songPath().isEmpty()) {
+        warn(QStringLiteral("ai_need_song"));
+        return;
+    }
+    const QString modelId = m_aiPage->modelId();
+    const neural::ModelEntry* entry = neural::modelById(modelId.toStdString());
+    if (entry == nullptr) {
+        warn(QStringLiteral("ai_invalid_model"));
+        return;
+    }
+    const QFileInfo songInfo(m_aiPage->songPath());
+    const QString base = songInfo.absolutePath() + QLatin1Char('/') + songInfo.completeBaseName();
+    const QString vocalOut = base + QStringLiteral("_vocal.wav");
+    const QString backgroundOut = base + QStringLiteral("_background.wav");
+    if (filepaths::equal(vocalOut, m_aiPage->songPath()) ||
+        filepaths::equal(backgroundOut, m_aiPage->songPath())) {
+        warn(QStringLiteral("warn_output_conflict"));
+        return;
+    }
+
+    auto* thread = new NeuralProcessingThread(m_aiPage->songPath(), modelId, vocalOut,
+                                              backgroundOut, m_lang, {}, this);
+    m_neuralThread = thread;
+    m_aiRunning = true;
+    connect(thread, &NeuralProcessingThread::progressUpdated, this, &MainWindow::updateProgress);
+    connect(thread, &NeuralProcessingThread::statusUpdated, this, &MainWindow::updateStatus);
+    connect(thread, &NeuralProcessingThread::processingFinished, this,
+            [this, thread](const QString&) { aiProcessingDone(thread); });
+    connect(thread, &NeuralProcessingThread::processingCancelled, this,
+            &MainWindow::processingCancelled);
+    connect(thread, &NeuralProcessingThread::errorOccurred, this, &MainWindow::processingError);
+    connect(thread, &QThread::finished, this, [this, thread]() {
+        if (m_neuralThread == thread) {
+            m_neuralThread = nullptr;
+            m_aiRunning = false;
+            m_aiPage->setProcessing(false);
+        }
+        thread->deleteLater();
+        if (m_closePending) {
+            m_closePending = false;
+            close();
+        }
+    });
+    m_stateToolTip = new qfw::StateToolTip(t(QStringLiteral("ai_inferring")),
+                                           t(QStringLiteral("ai_loading_model")), this);
+    connect(m_stateToolTip, &qfw::StateToolTip::closedSignal, m_stateToolTip, &QObject::deleteLater);
+    m_stateToolTip->move(m_stateToolTip->getSuitablePos());
+    m_stateToolTip->show();
+    m_aiPage->setProgress(0);
+    m_aiPage->setProcessing(true);
+    thread->start();
+}
+
+void MainWindow::aiProcessingDone(NeuralProcessingThread* thread) {
+    m_aiPage->setProgress(100);
+    QString message = i18n::t(m_lang, QStringLiteral("ai_done_msg"));
+    message.replace(QStringLiteral("{vocal}"), thread->vocalOutPath())
+        .replace(QStringLiteral("{background}"), thread->backgroundOutPath());
+    m_aiPage->setStatus(i18n::t(m_lang, QStringLiteral("ai_done"))
+                            .replace(QStringLiteral("{vocal}"), thread->vocalOutPath())
+                            .replace(QStringLiteral("{background}"), thread->backgroundOutPath()));
+    if (m_stateToolTip) {
+        m_stateToolTip->setState(true);
+        m_stateToolTip = nullptr;
+    }
+    qfw::InfoBar::success(t(QStringLiteral("done_title")), message, Qt::Horizontal, true, 4000,
+                          qfw::InfoBarPosition::TopRight, this);
+}
+
+void MainWindow::cancelProcessing() {
+    if (m_thread && m_thread->isRunning())
         m_thread->cancel();
-    m_homePage->setStatus(t(QStringLiteral("cancelled")));
+    if (m_neuralThread && m_neuralThread->isRunning())
+        m_neuralThread->cancel();
+    if (m_aiRunning)
+        m_aiPage->setStatus(t(QStringLiteral("cancelled")));
+    else
+        m_homePage->setStatus(t(QStringLiteral("cancelled")));
     if (m_stateToolTip) {
         m_stateToolTip->deleteLater();
         m_stateToolTip = nullptr;
@@ -184,11 +280,17 @@ void MainWindow::cancelProcessing() {
 }
 
 void MainWindow::updateProgress(int value) {
-    m_homePage->setProgress(value);
+    if (m_aiRunning)
+        m_aiPage->setProgress(value);
+    else
+        m_homePage->setProgress(value);
 }
 
 void MainWindow::updateStatus(const QString& message) {
-    m_homePage->setStatus(message);
+    if (m_aiRunning)
+        m_aiPage->setStatus(message);
+    else
+        m_homePage->setStatus(message);
     if (m_stateToolTip)
         m_stateToolTip->setContent(message);
 }
@@ -224,6 +326,16 @@ void MainWindow::processingError(const QString& errorMessage) {
 
 // ---- 伴奏自动查找 ----
 
+void MainWindow::updateAiModelStatus(const QString& modelId) {
+    const neural::ModelEntry* entry = neural::modelById(modelId.toStdString());
+    if (entry == nullptr)
+        entry = neural::defaultModel();
+    const QString modelPath = neuralpaths::resolveModelPath(QString::fromStdString(entry->fileName));
+    m_aiPage->setModelStatus(modelPath.isEmpty()
+                                 ? i18n::t(m_lang, QStringLiteral("ai_model_need_download"))
+                                 : i18n::t(m_lang, QStringLiteral("ai_model_ready")));
+}
+
 void MainWindow::autoFindAccompaniment() {
     if (m_homePage->songPath().isEmpty())
         return;
@@ -238,9 +350,12 @@ void MainWindow::autoFindAccompaniment() {
 }
 
 void MainWindow::closeEvent(QCloseEvent* e) {
-    if (m_thread && m_thread->isRunning()) {
+    if ((m_thread && m_thread->isRunning()) || (m_neuralThread && m_neuralThread->isRunning())) {
         m_closePending = true;
-        m_thread->cancel();
+        if (m_thread)
+            m_thread->cancel();
+        if (m_neuralThread)
+            m_neuralThread->cancel();
         e->ignore();
         return;
     }

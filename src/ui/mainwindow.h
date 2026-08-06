@@ -3,9 +3,11 @@
 #include <QPointer>
 #include <QString>
 
+#include "neuralprocessingthread.h"
 #include "processingthread.h"
 #include "qtfluentwidgets.h"
 
+class AiPage;
 class HomePage;
 class SettingsPage;
 
@@ -14,7 +16,7 @@ class NavigationWidget;
 class StateToolTip;
 } // namespace qfw
 
-// 主窗口: FluentWindow + 左侧导航 (主页 / 设置)
+// 主窗口: FluentWindow + 左侧导航 (主页 / AI 人声提取 / 设置)
 class MainWindow : public qfw::FluentWindow {
     Q_OBJECT
 public:
@@ -30,22 +32,29 @@ private:
     void refreshAllText();
 
     void startProcessing();
+    void startAiExtraction();
     void cancelProcessing();
     void updateProgress(int value);
     void updateStatus(const QString& message);
     void processingDone(const QString& outputPath);
+    void aiProcessingDone(NeuralProcessingThread* thread);
     void processingCancelled();
     void processingError(const QString& errorMessage);
     void autoFindAccompaniment();
+    void updateAiModelStatus(const QString& modelId);
 
     QString m_lang = QStringLiteral("zh_cn");
     QString m_theme = QStringLiteral("auto");
     QPointer<ProcessingThread> m_thread;
+    QPointer<NeuralProcessingThread> m_neuralThread;
     QPointer<qfw::StateToolTip> m_stateToolTip;
     bool m_closePending = false;
+    bool m_aiRunning = false; // 进度/状态更新路由到 AiPage 而非 HomePage
 
+    AiPage* m_aiPage = nullptr;
     HomePage* m_homePage = nullptr;
     SettingsPage* m_settingsPage = nullptr;
+    qfw::NavigationWidget* m_aiNav = nullptr;
     qfw::NavigationWidget* m_homeNav = nullptr;
     qfw::NavigationWidget* m_settingsNav = nullptr;
 };

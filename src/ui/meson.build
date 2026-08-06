@@ -1,6 +1,7 @@
 ui_include = include_directories('.')
 ui_moc = qt6.compile_moc(
     headers: [
+        'aipage.h',
         'fluentcombo.h',
         'fluentswitch.h',
         'homepage.h',
@@ -14,6 +15,7 @@ ui_moc = qt6.compile_moc(
 ui_library = static_library(
     'mr_ui',
     [
+        'aipage.cpp',
         'fluentcombo.cpp',
         'fluentswitch.cpp',
         'homepage.cpp',

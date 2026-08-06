@@ -6,3 +6,5 @@ vocal-extractor/
 __pycache__/
 *.pyc
 *.egg-info/
+models/*.onnx
+third_party/onnxruntime/lib/*.so*

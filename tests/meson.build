@@ -6,6 +6,19 @@ dsp_test = executable(
 
 test('dsp', dsp_test, timeout: 120)
 
+neural_test = executable(
+    'neural_test',
+    'neural_test.cpp',
+    dependencies: neural_dep,
+)
+
+test(
+    'neural',
+    neural_test,
+    args: [meson.project_source_root() / 'models' / 'model_data.json'],
+    timeout: 60,
+)
+
 audio_test = executable(
     'audio_test',
     'audio_test.cpp',

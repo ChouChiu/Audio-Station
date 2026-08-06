@@ -1,7 +1,9 @@
 #include <QApplication>
 #include <QCommandLineParser>
 #include <QCoreApplication>
+#include <QDir>
 #include <QEventLoop>
+#include <QFileInfo>
 #include <QSettings>
 #include <QTimer>
 #include <QTranslator>
@@ -10,7 +12,10 @@
 #include <memory>
 
 #include "config.h"
+#include "filepaths.h"
 #include "mainwindow.h"
+#include "modelcatalog.h"
+#include "neuralprocessingthread.h"
 #include "processingthread.h"
 
 namespace {
@@ -86,10 +91,82 @@ int runCli(QCommandLineParser& parser) {
 
 } // namespace
 
+namespace {
+
+bool validateLang(const QString& lang) {
+    return lang == QLatin1String("zh_cn") || lang == QLatin1String("ja_jp") ||
+           lang == QLatin1String("ko_kr");
+}
+
+int runCliNeural(QCommandLineParser& parser) {
+    const QStringList args = parser.positionalArguments();
+    if (args.size() != 1) {
+        std::fprintf(stderr, "usage: mr_remover --extract-vocal <song> [--out-dir <dir>]\n");
+        return 1;
+    }
+    const QString lang = parser.value(QStringLiteral("lang"));
+    if (!validateLang(lang)) {
+        std::fprintf(stderr, "error: lang must be one of zh_cn, ja_jp, ko_kr\n");
+        return 2;
+    }
+    QString modelId = parser.value(QStringLiteral("model"));
+    if (modelId.isEmpty())
+        modelId = QString::fromStdString(neural::defaultModel()->id);
+    if (neural::modelById(modelId.toStdString()) == nullptr) {
+        std::fprintf(stderr, "error: unknown model id: %s\n", modelId.toUtf8().constData());
+        std::fprintf(stderr, "available models:");
+        for (const neural::ModelEntry& entry : neural::modelCatalog())
+            std::fprintf(stderr, " %s", entry.id.c_str());
+        std::fprintf(stderr, "\n");
+        return 2;
+    }
+    const QString modelsDir = parser.value(QStringLiteral("models-dir"));
+    const QFileInfo songInfo(args[0]);
+    QString outDir = parser.value(QStringLiteral("out-dir"));
+    if (outDir.isEmpty())
+        outDir = songInfo.absolutePath();
+    const QString base = QDir(outDir).filePath(songInfo.completeBaseName());
+    const QString vocalOut = base + QStringLiteral("_vocal.wav");
+    const QString backgroundOut = base + QStringLiteral("_background.wav");
+    if (filepaths::equal(vocalOut, args[0]) || filepaths::equal(backgroundOut, args[0])) {
+        std::fprintf(stderr, "error: output files would overwrite the song\n");
+        return 2;
+    }
+
+    NeuralProcessingThread thread(args[0], modelId, vocalOut, backgroundOut, lang, modelsDir);
+    QEventLoop loop;
+    bool ok = false;
+    QObject::connect(&thread, &NeuralProcessingThread::progressUpdated, [](int value) {
+        std::printf("progress: %d\n", value);
+        std::fflush(stdout);
+    });
+    QObject::connect(&thread, &NeuralProcessingThread::statusUpdated, [](const QString& msg) {
+        std::printf("status: %s\n", msg.toUtf8().constData());
+        std::fflush(stdout);
+    });
+    QObject::connect(&thread, &NeuralProcessingThread::processingFinished, &loop, [&]() {
+        ok = true;
+        loop.quit();
+    });
+    QObject::connect(&thread, &NeuralProcessingThread::errorOccurred, &loop,
+                     [&](const QString& msg) {
+                         std::fprintf(stderr, "error: %s\n", msg.toUtf8().constData());
+                         std::fflush(stderr);
+                         loop.quit();
+                     });
+    thread.start();
+    loop.exec();
+    thread.wait();
+    return ok ? 0 : 1;
+}
+
+} // namespace
+
 int main(int argc, char* argv[]) {
     bool cliRequested = false;
     for (int i = 1; i < argc; ++i) {
-        if (QString::fromLocal8Bit(argv[i]) == QLatin1String("--process")) {
+        const QString arg = QString::fromLocal8Bit(argv[i]);
+        if (arg == QLatin1String("--process") || arg == QLatin1String("--extract-vocal")) {
             cliRequested = true;
             break;
         }
@@ -114,6 +191,25 @@ int main(int argc, char* argv[]) {
     QCommandLineOption processOpt(QStringLiteral("process"),
                                   QStringLiteral("Run headless processing: <song> <acc> <out>"));
     parser.addOption(processOpt);
+    QCommandLineOption extractVocalOpt(
+        QStringLiteral("extract-vocal"),
+        QStringLiteral("AI vocal extraction with background removal (UVR MDX-Net): <song>"));
+    parser.addOption(extractVocalOpt);
+    QCommandLineOption modelOpt(
+        QStringLiteral("model"),
+        QStringLiteral("Model id for --extract-vocal (default: mdxnet_1)"), QStringLiteral("id"),
+        QString());
+    parser.addOption(modelOpt);
+    QCommandLineOption modelsDirOpt(
+        QStringLiteral("models-dir"),
+        QStringLiteral("Directory for AI model weights (default: auto-detect)"),
+        QStringLiteral("dir"));
+    parser.addOption(modelsDirOpt);
+    QCommandLineOption outDirOpt(
+        QStringLiteral("out-dir"),
+        QStringLiteral("Output directory for extracted stems (default: song directory)"),
+        QStringLiteral("dir"));
+    parser.addOption(outDirOpt);
     QCommandLineOption algorithmOpt(QStringLiteral("algorithm"), QStringLiteral("Algorithm key (default: lossless)"),
                                     QStringLiteral("key"), QStringLiteral("lossless"));
     parser.addOption(algorithmOpt);
@@ -140,6 +236,8 @@ int main(int argc, char* argv[]) {
 
     if (parser.isSet(processOpt))
         return runCli(parser);
+    if (parser.isSet(extractVocalOpt))
+        return runCliNeural(parser);
 
     // 中文界面时加载库自带翻译 (内部控件文案)
     const QString lang = QSettings().value(QStringLiteral("lang"), QStringLiteral("zh_cn")).toString();

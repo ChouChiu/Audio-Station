@@ -26,6 +26,7 @@ project_config_include = include_directories('.')
 qt_core_dep = dependency('qt6', modules: ['Core'], version: '>=6.5')
 qt_multimedia_dep = dependency('qt6', modules: ['Multimedia'], version: '>=6.5')
 qt_widgets_dep = dependency('qt6', modules: ['Widgets'], version: '>=6.5')
+qt_network_dep = dependency('qt6', modules: ['Network'], version: '>=6.5')
 fftw3_dep = dependency('fftw3')
 soxr_dep = dependency('soxr')
 
