@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Download UVR MDX-Net vocal extraction models for MR Remover.
+"""Download UVR MDX-Net vocal extraction models for Audio Station.
 
 与 src/neural/modelcatalog.cpp 的目录一致 (每个系列只收录最强模型)。
 默认下载默认模型 (mdxnet_1); --all 下载全部。目标目录默认 <repo>/models,

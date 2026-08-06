@@ -65,5 +65,5 @@ summary(
         'Build type': get_option('buildtype'),
         'Clang-Tidy target': clang_tidy.found(),
     },
-    section: 'MR Remover',
+    section: 'Audio Station',
 )

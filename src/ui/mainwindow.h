@@ -9,6 +9,7 @@
 
 class AiPage;
 class HomePage;
+class MrPage;
 class SettingsPage;
 
 namespace qfw {
@@ -49,12 +50,14 @@ private:
     QPointer<NeuralProcessingThread> m_neuralThread;
     QPointer<qfw::StateToolTip> m_stateToolTip;
     bool m_closePending = false;
-    bool m_aiRunning = false; // 进度/状态更新路由到 AiPage 而非 HomePage
+    bool m_aiRunning = false; // 进度/状态更新路由到 AiPage 而非 MrPage
 
-    AiPage* m_aiPage = nullptr;
     HomePage* m_homePage = nullptr;
+    MrPage* m_mrPage = nullptr;
+    AiPage* m_aiPage = nullptr;
     SettingsPage* m_settingsPage = nullptr;
-    qfw::NavigationWidget* m_aiNav = nullptr;
     qfw::NavigationWidget* m_homeNav = nullptr;
+    qfw::NavigationWidget* m_mrNav = nullptr;
+    qfw::NavigationWidget* m_aiNav = nullptr;
     qfw::NavigationWidget* m_settingsNav = nullptr;
 };

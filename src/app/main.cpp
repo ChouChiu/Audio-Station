@@ -184,7 +184,7 @@ int main(int argc, char* argv[]) {
     QCoreApplication::setApplicationVersion(QStringLiteral(MR_REMOVER_VERSION));
 
     QCommandLineParser parser;
-    parser.setApplicationDescription(QStringLiteral("MR Remover - vocal and accompaniment separation (C++/Qt6)"));
+    parser.setApplicationDescription(QStringLiteral("Audio Station - vocal and accompaniment separation (C++/Qt6)"));
     parser.addHelpOption();
     parser.addVersionOption();
 
