@@ -6,7 +6,8 @@
 
 - **AI 人声提取（去背景音）**：集成 UVR 的 MDX-Net 谱域模型（onnxruntime 推理），无需伴奏参考即可从歌曲中提取人声与背景音轨
 - 7 种参考对消算法：无损模式、软掩码、谱减法、Wiener 滤波、频率加权、二值掩码、相位敏感
-- FFT 互相关自动估计并校正伴奏时间偏移
+- FFT 粗对齐 + 小数采样/局部延迟轨迹，校正伴奏时间偏移与录制时钟漂移
+- 无损模式使用立体声 2×2 自适应参考对消；参考中不存在的观众声与现场环境声不处理
 - 根据文件名相似度与关键词自动查找伴奏
 - 中文、日本語、한국어界面
 - 支持 Qt Multimedia 可解码的 MP3、WAV、FLAC、M4A 等格式
@@ -88,7 +89,7 @@ AI 人声提取页：选择歌曲文件与模型后点击「提取人声（去�
 
 ```bash
 ./build/src/app/mr_remover --process <song> <accompaniment> <output.wav> \
-  --algorithm lossless --strength 50 --sigma 1 --align on --lang zh_cn
+  --algorithm lossless --strength 75 --sigma 1 --align on --lang zh_cn
 ```
 
 AI 人声提取（去背景音，无需伴奏）：

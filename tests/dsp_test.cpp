@@ -84,6 +84,33 @@ int main() {
     const std::vector<Vec> aligned = dsp::alignAudio(song, acc, sr);
     const double alignCorr = corr(aligned[0], inst, static_cast<size_t>(sr));
     expect(alignCorr > 0.99, "alignment correlation is too low");
+    const auto fractionalDelay = [](const Vec& v, double delay) {
+        Vec o(v.size(), 0.0);
+        for (size_t i = 0; i < v.size(); ++i) {
+            const double p = static_cast<double>(i) - delay;
+            const long j = static_cast<long>(std::floor(p));
+            if (j >= 0 && j + 1 < static_cast<long>(v.size())) {
+                const double u = p - static_cast<double>(j);
+                o[i] = v[static_cast<size_t>(j)] * (1.0 - u) +
+                       v[static_cast<size_t>(j + 1)] * u;
+            }
+        }
+        return o;
+    };
+    Vec probe(n), probeSong(n);
+    uint32_t probeSeed = 7u;
+    double probeState = 0.0;
+    for (size_t i = 0; i < n; ++i) {
+        probeSeed = probeSeed * 1664525u + 1013904223u;
+        const double excitation = static_cast<double>(probeSeed) / 4294967295.0 * 2.0 - 1.0;
+        probeState = 0.78 * probeState + 0.22 * excitation;
+        probe[i] = 0.25 * probeState;
+        probeSong[i] = probe[i] + 0.08 * vocal[i];
+    }
+    const std::vector<Vec> alignedFractional = dsp::alignAudio(
+        {probeSong}, {fractionalDelay(probe, static_cast<double>(lag) + 0.37)}, sr);
+    const double fractionalAlignCorr = corr(alignedFractional[0], probe, static_cast<size_t>(sr));
+    expect(fractionalAlignCorr > 0.98, "fractional alignment correlation is too low");
 
     const dsp::Algorithm algos[] = {dsp::Algorithm::SoftMask,        dsp::Algorithm::SpectralSubtraction,
                                     dsp::Algorithm::WienerFilter,    dsp::Algorithm::FrequencyWeighted,
@@ -125,6 +152,10 @@ int main() {
         }
         return o;
     };
+    const Vec driftedProbe = timeStretch(probe, 0.004);
+    const std::vector<Vec> locallyAligned = dsp::alignAudio({probe}, {driftedProbe}, sr);
+    const double localAlignCorr = corr(locallyAligned[0], probe, n);
+    expect(localAlignCorr > 0.55, "local drift alignment correlation is too low");
     // 分段时序抖动: 1s 段确定性偏移 ±4ms (论文 #15 的分段相位阶跃;
     // 实测 ±8ms 在 110Hz 处产生 5.5 rad 阶跃, 超出 σ_t 平滑窗跟踪能力, 非真实场景)
     const auto jitter = [&](const Vec& v) {
@@ -177,17 +208,54 @@ int main() {
     const double audV = corr(outAud, vocal, std::min(outAud.size(), n));
     const double audI = corr(outAud, inst, std::min(outAud.size(), n));
     const double audNoiseIn = corr(mixAud, noise, std::min(mixAud.size(), n));
-    const double audNoiseOut = corr(outAud, noise, std::min(outAud.size(), n));
+    Vec audienceResidual(std::min(outAud.size(), n));
+    for (size_t i = 0; i < audienceResidual.size(); ++i)
+        audienceResidual[i] = outAud[i] - vocal[i];
+    const double audNoiseOut = corr(audienceResidual, noise, audienceResidual.size());
     expect(audV > 0.95, "audience: vocal damaged");
-    expect(audNoiseOut < 0.5 * audNoiseIn, "audience: noise not halved");
+    expect(audNoiseOut > 0.95, "audience: non-reference sound was modified");
+
+    // 立体声交叉传递：每个输出同时混有参考 L/R，逐声道 L/L、R/R 对消无法完整消除。
+    Vec refL(n), refR(n), vocalL(n), vocalR(n), mixL(n), mixR(n);
+    for (size_t i = 0; i < n; ++i) {
+        refL[i] = 0.28 * std::sin(2.0 * kPi * 123.0 * t[i]) +
+                  0.12 * std::sin(2.0 * kPi * 257.0 * t[i]);
+        refR[i] = 0.24 * std::sin(2.0 * kPi * 181.0 * t[i]) +
+                  0.10 * std::sin(2.0 * kPi * 367.0 * t[i]);
+        vocalL[i] = 0.35 * std::sin(2.0 * kPi * 431.0 * t[i]) +
+                    0.12 * std::sin(2.0 * kPi * 862.0 * t[i]);
+        vocalR[i] = 0.32 * std::sin(2.0 * kPi * 523.0 * t[i]) +
+                    0.11 * std::sin(2.0 * kPi * 1046.0 * t[i]);
+        mixL[i] = vocalL[i] + 0.72 * refL[i] + 0.38 * refR[i];
+        mixR[i] = vocalR[i] - 0.26 * refL[i] + 0.81 * refR[i];
+    }
+    const std::vector<Vec> stereoOut = dsp::processStereo(
+        {mixL, mixR}, {refL, refR}, sr, 2048, 512, 1.0, dsp::Algorithm::Lossless, 8);
+    expect(stereoOut.size() == 2 && stereoOut[0].size() == n && stereoOut[1].size() == n,
+           "stereo lossless processing changed channel count or length");
+    const double stereoVocal = stereoOut.size() == 2 ?
+        std::min(corr(stereoOut[0], vocalL, n), corr(stereoOut[1], vocalR, n)) : 0.0;
+    const double stereoLeak = stereoOut.size() == 2 ?
+        std::max({std::abs(corr(stereoOut[0], refL, n)), std::abs(corr(stereoOut[0], refR, n)),
+                  std::abs(corr(stereoOut[1], refL, n)), std::abs(corr(stereoOut[1], refR, n))}) : 1.0;
+    expect(stereoVocal > 0.94, "MIMO cancellation damaged stereo vocals");
+    expect(stereoLeak < 0.08, "MIMO cancellation left stereo cross-feed accompaniment");
+    const std::vector<Vec> bypass = dsp::processStereo(
+        {mixL, mixR}, {refL, refR}, sr, 2048, 512, 0.0, dsp::Algorithm::Lossless, 8);
+    expect(bypass.size() == 2 && bypass[0].size() == n && corr(bypass[0], mixL, n) > 0.999999,
+           "zero strength is not a transparent bypass");
     std::printf("  },\n");
     std::printf("  \"scenes\": {\n");
     std::printf("    \"tempo_drift_0p4\": {\"r_vocal\": %.6f, \"r_inst\": %.6f},\n", d04V, d04I);
     std::printf("    \"tempo_drift_1pct\": {\"r_vocal\": %.6f, \"r_inst\": %.6f},\n", d1V, d1I);
     std::printf("    \"timing_jitter\": {\"r_vocal\": %.6f, \"r_inst\": %.6f},\n", jitV, jitI);
-    std::printf("    \"audience_noise\": {\"r_vocal\": %.6f, \"r_inst\": %.6f, "
-                "\"r_noise_in\": %.6f, \"r_noise_out\": %.6f}\n",
+    std::printf("    \"audience_preservation\": {\"r_vocal\": %.6f, \"r_inst\": %.6f, "
+                "\"r_noise_in\": %.6f, \"r_noise_out\": %.6f},\n",
                 audV, audI, audNoiseIn, audNoiseOut);
+    std::printf("    \"stereo_mimo\": {\"r_vocal_min\": %.6f, \"r_ref_max\": %.6f},\n",
+                stereoVocal, stereoLeak);
+    std::printf("    \"fractional_alignment\": {\"corr\": %.6f},\n", fractionalAlignCorr);
+    std::printf("    \"local_alignment\": {\"corr\": %.6f}\n", localAlignCorr);
     std::printf("  }\n}\n");
     return passed ? 0 : 1;
 }

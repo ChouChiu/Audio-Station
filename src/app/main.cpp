@@ -213,8 +213,8 @@ int main(int argc, char* argv[]) {
     QCommandLineOption algorithmOpt(QStringLiteral("algorithm"), QStringLiteral("Algorithm key (default: lossless)"),
                                     QStringLiteral("key"), QStringLiteral("lossless"));
     parser.addOption(algorithmOpt);
-    QCommandLineOption strengthOpt(QStringLiteral("strength"), QStringLiteral("Strength 0-100 (default: 50)"),
-                                   QStringLiteral("value"), QStringLiteral("50"));
+    QCommandLineOption strengthOpt(QStringLiteral("strength"), QStringLiteral("Strength 0-100 (default: 75)"),
+                                   QStringLiteral("value"), QStringLiteral("75"));
     parser.addOption(strengthOpt);
     QCommandLineOption sigmaOpt(QStringLiteral("sigma"), QStringLiteral("Sigma time 1|3|8|16 (default: 1)"),
                                 QStringLiteral("value"), QStringLiteral("1"));

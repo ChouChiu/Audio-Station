@@ -11,7 +11,7 @@ class ProcessingThread : public QThread {
     Q_OBJECT
 public:
     struct Params {
-        int strength = 50;
+        int strength = 75;
         bool autoAlign = true;
         dsp::Algorithm algorithm = dsp::Algorithm::Lossless;
         int sigmaTime = 1; // 默认 σ=1, 镜像参考 combo 首次填充停在索引 0

@@ -111,16 +111,18 @@ void ProcessingThread::run() {
         const dsp::Algorithm algo = m_params.algorithm;
 
         emit statusUpdated(t(QStringLiteral("proc_left")));
-        dsp::Vec left = dsp::processChannel(song.channels[0], acc.channels[0], song.sampleRate, nFft,
-                                            hop, strength, algo, m_params.sigmaTime, stopToken);
+        std::vector<dsp::Vec> processed = dsp::processStereo(
+            song.channels, acc.channels, song.sampleRate, nFft, hop, strength, algo,
+            m_params.sigmaTime, stopToken);
         if (cancelled())
             return;
-        emit progressUpdated(60);
-        emit statusUpdated(t(QStringLiteral("proc_right")));
-        dsp::Vec right = dsp::processChannel(song.channels[1], acc.channels[1], song.sampleRate, nFft,
-                                             hop, strength, algo, m_params.sigmaTime, stopToken);
-        if (cancelled())
+        if (processed.size() < 2 || processed[0].empty() || processed[1].empty()) {
+            emit errorOccurred(t(QStringLiteral("proc_error"),
+                                 {{QStringLiteral("{msg}"), QStringLiteral("DSP processing failed")}}));
             return;
+        }
+        dsp::Vec left = std::move(processed[0]);
+        dsp::Vec right = std::move(processed[1]);
         emit progressUpdated(80);
 
         // 镜像 nan_to_num: 非有限值 -> 0
@@ -136,6 +138,20 @@ void ProcessingThread::run() {
                 x = std::clamp(x, -1.0, 1.0);
             for (double& x : right)
                 x = std::clamp(x, -1.0, 1.0);
+        } else {
+            // 双声道联动峰值保护。24-bit 只降低量化误差，不能阻止 WAV 写出阶段硬削波。
+            double peak = 0.0;
+            for (double x : left)
+                peak = std::max(peak, std::abs(x));
+            for (double x : right)
+                peak = std::max(peak, std::abs(x));
+            if (peak > 0.999) {
+                const double scale = 0.999 / peak;
+                for (double& x : left)
+                    x *= scale;
+                for (double& x : right)
+                    x *= scale;
+            }
         }
         emit progressUpdated(90);
 

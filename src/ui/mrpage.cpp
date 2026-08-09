@@ -96,10 +96,10 @@ MrPage::MrPage(QWidget* parent) : QWidget(parent) {
 
     m_strengthLabel = ui::bodyLabel();
     m_strengthValueLabel = ui::bodyLabel();
-    m_strengthValueLabel->setText(QStringLiteral("50%"));
+    m_strengthValueLabel->setText(QStringLiteral("75%"));
     m_strengthSlider = new qfw::Slider(Qt::Horizontal);
     m_strengthSlider->setRange(0, 100);
-    m_strengthSlider->setValue(50);
+    m_strengthSlider->setValue(75);
     m_strengthSlider->setMinimumWidth(180); // 自适应宽度, 随窗口伸缩; 开关作为行末元素始终贴右
     connect(m_strengthSlider, &qfw::Slider::valueChanged, this, [this](int value) {
         m_strengthValueLabel->setText(QStringLiteral("%1%").arg(value));

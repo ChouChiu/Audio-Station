@@ -6,6 +6,7 @@
 #include <fftw3.h>
 #include <limits>
 #include <numbers>
+#include <utility>
 
 namespace dsp {
 
@@ -97,8 +98,8 @@ std::vector<CVec> stft(const Vec& x, int nFft, int hop, const std::stop_token& s
     const int pad = nFft / 2;
     if (n > std::numeric_limits<int>::max() - 2 * pad)
         return {};
-    const int paddedLen = n + 2 * pad;
-    const int nFrames = 1 + (paddedLen - nFft) / hop;
+    // 最后一帧向右 reflect 补齐，保证 iSTFT 可按原始长度裁剪而不是丢掉尾部 < hop 的样本。
+    const int nFrames = 1 + static_cast<int>((static_cast<long long>(n) + hop - 1LL) / hop);
     if (nFrames <= 0)
         return {};
     const Vec window = hann(nFft);
@@ -251,14 +252,15 @@ std::vector<Vec> alignAudio(const std::vector<Vec>& song, const std::vector<Vec>
         check = std::min(check, channel.size());
     for (const Vec& channel : acc)
         check = std::min(check, channel.size());
-    const size_t accLen = check;
-    if (songLen == 0 || accLen == 0)
+    const size_t commonLen = check;
+    if (songLen == 0 || commonLen == 0)
         return acc;
-    check = std::min(static_cast<size_t>(30) * static_cast<size_t>(sr), check);
+    const size_t globalCheck =
+        std::min(static_cast<size_t>(8) * static_cast<size_t>(sr), commonLen);
     const int nChSong = static_cast<int>(song.size());
     const int nChAcc = static_cast<int>(acc.size());
-    Vec songMono(check), accMono(check);
-    for (size_t i = 0; i < check; ++i) {
+    Vec songMono(commonLen), accMono(commonLen);
+    for (size_t i = 0; i < commonLen; ++i) {
         double s = 0.0;
         for (int c = 0; c < nChSong; ++c)
             s += song[static_cast<size_t>(c)][i];
@@ -284,17 +286,17 @@ std::vector<Vec> alignAudio(const std::vector<Vec>& song, const std::vector<Vec>
     normalize(songMono);
     normalize(accMono);
     // FFT 互相关: C = irfft(rfft(song) * conj(rfft(acc))), 取前 N+M-1 个
-    const size_t N = check;
-    const size_t M = check;
+    const size_t N = globalCheck;
+    const size_t M = globalCheck;
     size_t npad = 1;
     while (npad < N + M - 1)
         npad <<= 1;
     if (npad > static_cast<size_t>(std::numeric_limits<int>::max()))
         return acc;
     std::vector<double> a(npad, 0.0), v(npad, 0.0);
-    std::copy(songMono.begin(), songMono.end(), a.begin());
+    std::copy(songMono.begin(), songMono.begin() + static_cast<long>(N), a.begin());
     // scipy.signal.correlate(x, y) = 卷积 x 与反转的 y: irfft(rfft(x) * rfft(y[::-1]))
-    std::copy(accMono.rbegin(), accMono.rend(), v.begin());
+    std::reverse_copy(accMono.begin(), accMono.begin() + static_cast<long>(M), v.begin());
     std::vector<double> A(2 * (npad / 2 + 1)), V(2 * (npad / 2 + 1));
     fftw_plan pa = fftw_plan_dft_r2c_1d(
         static_cast<int>(npad), a.data(), reinterpret_cast<fftw_complex*>(A.data()), FFTW_ESTIMATE);
@@ -343,29 +345,150 @@ std::vector<Vec> alignAudio(const std::vector<Vec>& song, const std::vector<Vec>
             bestIdx = i;
         }
     }
-    const long lag = static_cast<long>(bestIdx) - static_cast<long>(M - 1);
-    std::vector<Vec> result = acc;
-    if (lag > 0) {
-        const size_t lagU = static_cast<size_t>(lag);
-        for (Vec& ch : result) {
-            Vec padded(lagU + ch.size(), 0.0);
-            std::copy(ch.begin(), ch.end(), padded.begin() + static_cast<long>(lagU));
-            ch = std::move(padded);
-            if (ch.size() > songLen)
-                ch.resize(songLen);
+    // 峰值抛物线插值获得小数采样延迟。整数移位在 10 kHz 处即使只差半个采样，
+    // 也会留下接近 90 度的相位误差，后续滤波很难稳定消除。
+    double peakDelta = 0.0;
+    if (bestIdx > 0 && bestIdx + 1 < N + M - 1) {
+        const double ym = a[bestIdx - 1], y0 = a[bestIdx], yp = a[bestIdx + 1];
+        const double denom = ym - 2.0 * y0 + yp;
+        if (std::abs(denom) > 1e-12)
+            peakDelta = std::clamp(0.5 * (ym - yp) / denom, -1.0, 1.0);
+    }
+    const double globalLag = static_cast<double>(bestIdx) + peakDelta - static_cast<double>(M - 1);
+
+    // 局部延迟轨迹：0.1 秒一个锚点、0.1 秒相关窗，在约 2 kHz 的抽取信号上搜索。
+    // 这一步修正现场录音常见的时钟漂移与局部剪辑抖动；最终仍以原采样率插值。
+    const int decim = std::max(1, sr / 2000);
+    const size_t anchorStep = std::max<size_t>(1, static_cast<size_t>(sr) / 10U);
+    const size_t halfWindow = std::max<size_t>(1, static_cast<size_t>(sr) / 20U);
+    struct Anchor {
+        double position;
+        double lag;
+    };
+    std::vector<Anchor> anchors;
+    anchors.push_back({.position = 0.0, .lag = globalLag});
+    double predictedLag = globalLag;
+    for (size_t center = std::min(halfWindow, commonLen - 1); center < commonLen;
+         center += anchorStep) {
+        if (stopToken.stop_requested())
+            return acc;
+        const size_t begin = center > halfWindow ? center - halfWindow : 0;
+        const size_t end = std::min(commonLen, center + halfWindow);
+        const double searchSeconds = anchors.size() == 1 ? 0.25 : 0.06;
+        const int radiusSteps = std::max(2, static_cast<int>(std::ceil(searchSeconds * sr / decim)));
+        double bestScore = -std::numeric_limits<double>::infinity();
+        double bestCorr = -1.0;
+        int bestOffset = 0;
+        std::vector<double> scores(static_cast<size_t>(2 * radiusSteps + 1), -1.0);
+        for (int d = -radiusSteps; d <= radiusSteps; ++d) {
+            const long lagSamples = std::lround(predictedLag + d * static_cast<double>(decim));
+            double xy = 0.0, xx = 0.0, yy = 0.0;
+            size_t used = 0;
+            for (size_t i = begin; i < end; i += static_cast<size_t>(decim)) {
+                const long long j = static_cast<long long>(i) - lagSamples;
+                if (j < 0 || std::cmp_greater_equal(j, accMono.size()))
+                    continue;
+                const double x = songMono[i];
+                const double y = accMono[static_cast<size_t>(j)];
+                xy += x * y;
+                xx += x * x;
+                yy += y * y;
+                ++used;
+            }
+            const double corr = used > 32 ? xy / std::sqrt(xx * yy + 1e-20) : -1.0;
+            const size_t scoreSlot =
+                static_cast<size_t>(static_cast<long long>(d) + radiusSteps);
+            scores[scoreSlot] = corr;
+            // 周期性音乐会产生多个相近峰；轻微惩罚远离预测轨迹的候选，避免跳周期。
+            const double score = corr - 0.25 * std::abs(d) / std::max(radiusSteps, 1);
+            if (score > bestScore) {
+                bestScore = score;
+                bestCorr = corr;
+                bestOffset = d;
+            }
         }
-    } else if (lag < 0) {
-        const size_t lagU = static_cast<size_t>(-lag);
-        for (Vec& ch : result) {
-            if (ch.size() > lagU)
-                ch.erase(ch.begin(), ch.begin() + static_cast<long>(lagU));
-            else
-                ch.clear();
-            const size_t padLen = songLen > ch.size() ? songLen - ch.size() : 0;
-            ch.insert(ch.end(), padLen, 0.0);
-            if (ch.size() > songLen)
-                ch.resize(songLen);
+        double localLag = predictedLag + bestOffset * static_cast<double>(decim);
+        const int scoreIndex = bestOffset + radiusSteps;
+        if (bestOffset != 0 && scoreIndex > 0 && scoreIndex + 1 < static_cast<int>(scores.size())) {
+            const double ym = scores[static_cast<size_t>(scoreIndex - 1)];
+            const double y0 = scores[static_cast<size_t>(scoreIndex)];
+            const double yp = scores[static_cast<size_t>(scoreIndex) + 1U];
+            const double denom = ym - 2.0 * y0 + yp;
+            if (std::abs(denom) > 1e-9)
+                localLag += std::clamp(0.5 * (ym - yp) / denom, -1.0, 1.0) * decim;
         }
+        const double predictedCorr = scores[static_cast<size_t>(radiusSteps)];
+        if (bestCorr < 0.06 || bestCorr < predictedCorr + 0.02)
+            localLag = predictedLag;
+        // 最大允许 2% 的局部时钟偏差，拒绝由弱相关/节拍重复造成的离群跳变。
+        const bool firstLocalAnchor = anchors.size() == 1;
+        const double dt = static_cast<double>(center) - anchors.back().position;
+        const double maxChange = firstLocalAnchor ? 0.30 * sr : std::max(2.0, 0.02 * dt);
+        localLag = std::clamp(localLag, anchors.back().lag - maxChange,
+                              anchors.back().lag + maxChange);
+        if (firstLocalAnchor)
+            anchors[0].lag = localLag;
+        anchors.push_back({.position = static_cast<double>(center), .lag = localLag});
+        predictedLag = localLag;
+        if (center > commonLen - 1 - std::min(anchorStep, commonLen - 1))
+            break;
+    }
+    if (anchors.back().position < static_cast<double>(songLen - 1))
+        anchors.push_back(
+            {.position = static_cast<double>(songLen - 1), .lag = anchors.back().lag});
+    if (anchors.size() > 3) {
+        std::vector<Anchor> filtered = anchors;
+        for (size_t i = 1; i + 1 < anchors.size(); ++i) {
+            double values[3] = {anchors[i - 1].lag, anchors[i].lag, anchors[i + 1].lag};
+            std::sort(std::begin(values), std::end(values));
+            filtered[i].lag = values[1];
+        }
+        anchors = std::move(filtered);
+    }
+
+    std::vector<Vec> result;
+    result.reserve(acc.size());
+    for (const Vec& channel : acc) {
+        Vec warped(songLen, 0.0);
+        size_t ai = 0;
+        for (size_t i = 0; i < songLen; ++i) {
+            while (ai + 1 < anchors.size() && static_cast<double>(i) > anchors[ai + 1].position)
+                ++ai;
+            const Anchor& p0 = anchors[ai];
+            const Anchor& p1 = anchors[std::min(ai + 1, anchors.size() - 1)];
+            const double span = p1.position - p0.position;
+            const double u = span > 0.0 ? (static_cast<double>(i) - p0.position) / span : 0.0;
+            const double lag = p0.lag + std::clamp(u, 0.0, 1.0) * (p1.lag - p0.lag);
+            const double source = static_cast<double>(i) - lag;
+            const long long centerSample = static_cast<long long>(std::floor(source));
+            constexpr int kLanczosRadius = 8;
+            if (centerSample - kLanczosRadius + 1 >= 0 &&
+                centerSample + kLanczosRadius < static_cast<long long>(channel.size())) {
+                double value = 0.0, weightSum = 0.0;
+                for (int tap = -kLanczosRadius + 1; tap <= kLanczosRadius; ++tap) {
+                    const long long j = centerSample + tap;
+                    const double d = source - static_cast<double>(j);
+                    const auto sinc = [](double x) {
+                        return std::abs(x) < 1e-12 ? 1.0 : std::sin(kPi * x) / (kPi * x);
+                    };
+                    const double weight = sinc(d) * sinc(d / kLanczosRadius);
+                    value += weight * channel[static_cast<size_t>(j)];
+                    weightSum += weight;
+                }
+                warped[i] = std::abs(weightSum) > 1e-12 ? value / weightSum : 0.0;
+            } else {
+                const long long j0 = centerSample;
+                const long long j1 = j0 + 1;
+                if (j0 >= 0 && std::cmp_less(j1, channel.size())) {
+                    const double frac = source - static_cast<double>(j0);
+                    warped[i] = channel[static_cast<size_t>(j0)] * (1.0 - frac) +
+                                channel[static_cast<size_t>(j1)] * frac;
+                } else if (j0 >= 0 && std::cmp_less(j0, channel.size())) {
+                    warped[i] = channel[static_cast<size_t>(j0)];
+                }
+            }
+        }
+        result.push_back(std::move(warped));
     }
     return result;
 }
@@ -374,7 +497,6 @@ std::vector<Vec> alignAudio(const std::vector<Vec>& song, const std::vector<Vec>
 // Lossless（无损模式）: 参考伴奏 + 幅度谱相干性对消 (coherence_cancel v3)
 //   阶段一: 分块速率漂移补偿(相位斜坡 de-rotation) + Mel 带域相干统计(γ² 去偏 +
 //           smoothstep 门限) + 逐帧增益 + 功率一致性钳位
-//   阶段二: 观众噪声抑制 (YIN F0 + 谐波梳 + 噪声 PSD Wiener)
 // 设计依据: 论文 #1(K-pop 对齐+缩放+相减, tempo 失配需 time-stretch),
 //           #7(W≤V 钳位, 中位数鲁棒), #11/#13(低频细带/mel 带域统计),
 //           #14(相位关键), #15(分段对齐+增益网格+非负钳位), #3(混合一致性)
@@ -585,176 +707,20 @@ double estimateRate(const std::vector<CVec>& Y, int yOffset, const std::vector<C
     return rates.back().first;
 }
 
-// YIN 基频估计 (de Cheveigné & Kawahara 2002, 简化版), 无可靠基频返回 0
-double yinPitch(const Vec& x, size_t start, int frame, int sr) {
-    const int tmax = std::min(static_cast<int>(sr / 60.0), frame / 2);
-    const int tmin = std::max(1, static_cast<int>(sr / 1000.0));
-    if (tmax <= tmin)
-        return 0.0;
-    Vec d(static_cast<size_t>(tmax + 1), 0.0);
-    for (int t = 1; t <= tmax; ++t) {
-        double acc = 0.0;
-        for (int j = 0; j + t < frame; ++j) {
-            const double a = x[start + static_cast<size_t>(j)];
-            const double b = x[start + static_cast<size_t>(j) + static_cast<size_t>(t)];
-            const double diff = a - b;
-            acc += diff * diff;
-        }
-        d[static_cast<size_t>(t)] = acc;
+// O(n) 的对称盒式平滑。协方差统计会对每个频点调用多次，不能使用 O(n*r) 高斯卷积。
+void boxSmooth(Vec& v, int radius) {
+    if (radius <= 0 || v.size() < 2)
+        return;
+    Vec prefix(v.size() + 1U, 0.0), out(v.size());
+    for (size_t i = 0; i < v.size(); ++i)
+        prefix[i + 1U] = prefix[i] + v[i];
+    const size_t radiusSize = static_cast<size_t>(radius);
+    for (size_t i = 0; i < v.size(); ++i) {
+        const size_t lo = i > radiusSize ? i - radiusSize : 0;
+        const size_t hi = std::min(v.size(), i + radiusSize + 1U);
+        out[i] = (prefix[hi] - prefix[lo]) / static_cast<double>(hi - lo);
     }
-    Vec cm(static_cast<size_t>(tmax + 1), 1.0);
-    double run = 0.0;
-    for (int t = 1; t <= tmax; ++t) {
-        run += d[static_cast<size_t>(t)];
-        cm[static_cast<size_t>(t)] = run > 0.0 ? d[static_cast<size_t>(t)] * t / run : 1.0;
-    }
-    double tau = 0.0;
-    bool found = false;
-    for (int t = tmin; t <= tmax; ++t) {
-        if (cm[static_cast<size_t>(t)] < 0.10) {
-            tau = t;
-            found = true;
-            break;
-        }
-    }
-    if (found) {
-        // 首个低于阈值的 τ 附近可能有更深的 dip (如 440+880 在 τ=48/50 都有 dip),
-        // 在 ±4 窗内取 cm 最小点再插值
-        const int lo = std::max(tmin, static_cast<int>(tau) - 4);
-        const int hi = std::min(tmax, static_cast<int>(tau) + 4);
-        auto it = std::min_element(cm.begin() + lo, cm.begin() + hi + 1);
-        if (it != cm.end())
-            tau = static_cast<double>(it - cm.begin());
-    } else {
-        auto it = std::min_element(cm.begin() + tmin, cm.begin() + tmax + 1);
-        if (it == cm.end() || *it > 0.5)
-            return 0.0;
-        tau = static_cast<double>(it - cm.begin());
-    }
-    const int tInt = static_cast<int>(tau);
-    if (tInt > 0 && tInt < tmax) {
-        const double a = cm[static_cast<size_t>(tInt - 1)];
-        const double b = cm[static_cast<size_t>(tInt)];
-        const double c = cm[static_cast<size_t>(tInt) + 1U];
-        const double den = a - 2.0 * b + c;
-        if (std::abs(den) > 1e-12)
-            tau += std::clamp(0.5 * (a - c) / den, -1.0, 1.0);
-    }
-    return tau > 0.0 ? static_cast<double>(sr) / tau : 0.0;
-}
-
-// 二阶 Butterworth 高通 (RBJ cookbook), fc=140Hz 防低频伴奏基频劫持 YIN
-Vec biquadHighpass(const Vec& x, int sr, double fc) {
-    const double w0 = 2.0 * kPi * fc / sr;
-    const double alpha = std::sin(w0) / std::numbers::sqrt2;
-    const double c = std::cos(w0);
-    const double b0 = (1.0 + c) / 2.0, b1 = -(1.0 + c), b2 = b0;
-    const double a0 = 1.0 + alpha, a1 = -2.0 * c, a2 = 1.0 - alpha;
-    Vec y(x.size());
-    double x1 = 0.0, x2 = 0.0, y1 = 0.0, y2 = 0.0;
-    for (size_t i = 0; i < x.size(); ++i) {
-        const double xn = x[i];
-        const double yn = (b0 * xn + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2) / a0;
-        x2 = x1;
-        x1 = xn;
-        y2 = y1;
-        y1 = yn;
-        y[i] = yn;
-    }
-    return y;
-}
-
-// 阶段二: 观众/环境噪声抑制 — 谐波(歌声)保留, 非谐波噪声按 PSD Wiener 衰减
-Vec suppressAudience(const Vec& x, int sr, const std::stop_token& stopToken) {
-    if (x.empty())
-        return x;
-    const Vec hp = biquadHighpass(x, sr, 140.0);
-    const int yF = 2048, yH = 512;
-    const int yFrames = hp.size() > static_cast<size_t>(yF)
-                            ? static_cast<int>((hp.size() - static_cast<size_t>(yF)) / yH) + 1
-                            : 0;
-    std::vector<double> f0(static_cast<size_t>(yFrames), 0.0);
-    for (int i = 0; i < yFrames; ++i) {
-        if ((i & 63) == 0 && stopToken.stop_requested())
-            return x;
-        f0[static_cast<size_t>(i)] = yinPitch(hp, static_cast<size_t>(i) * yH, yF, sr);
-    }
-    auto X = stft(x, kLosslessNfft, kLosslessHop, stopToken);
-    if (X.empty())
-        return x;
-    const int frames = static_cast<int>(X.size());
-    const int bins = static_cast<int>(X[0].size());
-    const double binHz = static_cast<double>(sr) / kLosslessNfft;
-    constexpr double kNoiseAlpha = 0.1;  // 噪声帧 PSD 更新率
-    constexpr double kVoiceAlpha = 0.05; // 人声帧谐波间隙 PSD 更新率
-    constexpr double kHarmRatio = 0.25;
-    constexpr int kF0Median = 5; // F0 中值滤波窗 (防梳窗抖动把谐波 bin 漏进 PSD)
-    Vec noisePsd(static_cast<size_t>(bins), 0.0);
-    Vec f0Hist(static_cast<size_t>(kF0Median), 0.0); // 环形缓冲
-    double f0Cur = 0.0; // 前向跟踪的当前有效 F0 (噪声帧也用它排除谐波, 防 PSD 吸收人声)
-    for (int f = 0; f < frames; ++f) {
-        if ((f & 63) == 0 && stopToken.stop_requested())
-            return x;
-        const int yIdx = std::clamp(f * kLosslessHop / yH, 0, yFrames - 1);
-        const double f0h = f0[static_cast<size_t>(yIdx)];
-        bool isVoice = false;
-        if (f0h > 40.0) {
-            double comb = 0.0, total = 0.0;
-            // 梳半宽与 F0 成比例 (容 YIN 估计误差), 下限一个 bin
-            const double combHalf = std::max(0.05 * f0h, binHz);
-            for (int k = 0; k < bins; ++k) {
-                const double p = std::norm(X[static_cast<size_t>(f)][static_cast<size_t>(k)]);
-                total += p;
-                const double fk = k * binHz;
-                const double n = fk / f0h;
-                if (std::abs(n - std::round(n)) * f0h <= combHalf)
-                    comb += p;
-            }
-            // 谐波性门: 梳状能量占比足够高才算人声帧, 防垃圾 F0 误伤
-            isVoice = total > 1e-12 && comb / total >= kHarmRatio;
-            if (isVoice) {
-                f0Hist[static_cast<size_t>(f % kF0Median)] = f0h;
-                // 仅对有效 F0 取中值 (未填充/失败的槽位为 0, 必须剔除)
-                Vec valid;
-                valid.reserve(f0Hist.size());
-                for (double v : f0Hist)
-                    if (v > 40.0)
-                        valid.push_back(v);
-                if (!valid.empty()) {
-                    std::sort(valid.begin(), valid.end());
-                    f0Cur = valid[valid.size() / 2];
-                }
-            }
-        }
-        const double alpha = isVoice ? kVoiceAlpha : kNoiseAlpha;
-        const double combHalf = std::max(0.05 * f0Cur, binHz);
-        for (int k = 0; k < bins; ++k) {
-            // 仅在谐波间隙更新 PSD: 谐波 bin 保留人声, 永不被 PSD 吸收
-            if (f0Cur > 40.0) {
-                const double fk = k * binHz;
-                const double n = fk / f0Cur;
-                if (std::abs(n - std::round(n)) * f0Cur <= combHalf)
-                    continue;
-            }
-            const double p = std::norm(X[static_cast<size_t>(f)][static_cast<size_t>(k)]);
-            noisePsd[static_cast<size_t>(k)] =
-                (1.0 - alpha) * noisePsd[static_cast<size_t>(k)] + alpha * p;
-        }
-    }
-    if (stopToken.stop_requested())
-        return x;
-    for (int f = 0; f < frames; ++f) {
-        if ((f & 63) == 0 && stopToken.stop_requested())
-            return x;
-        for (int k = 0; k < bins; ++k) {
-            const double p = std::norm(X[static_cast<size_t>(f)][static_cast<size_t>(k)]);
-            // Wiener: 分母加 0.5·N 在中低信噪比下比纯谱减更强
-            const double v = std::max(0.0, p - noisePsd[static_cast<size_t>(k)]);
-            const double g = v / (p + 0.5 * noisePsd[static_cast<size_t>(k)] + 1e-12);
-            X[static_cast<size_t>(f)][static_cast<size_t>(k)] *= g;
-        }
-    }
-    return istft(X, kLosslessHop, stopToken);
+    v = std::move(out);
 }
 
 // 无损模式主流程 (coherence_cancel v3)
@@ -952,15 +918,169 @@ Vec losslessCancel(const Vec& song, const Vec& acc, int sr, double strength, dou
                 Yv[static_cast<size_t>(f)][static_cast<size_t>(k)] /= wsum[static_cast<size_t>(f)];
     }
     Vec vocal = istft(Yv, kLosslessHop, stopToken);
-    return suppressAudience(vocal, sr, stopToken);
+    vocal.resize(std::min(song.size(), acc.size()), 0.0);
+    return vocal;
+}
+
+// 立体声 MIMO 参考对消。对每个频点估计 Y=[H_L,H_R]A，协方差仅沿时间平滑，
+// 不再把不同频率的复相位先混入 Mel 带，从根源上避免高频相位互相抵消。
+std::vector<Vec> losslessCancelStereo(const std::vector<Vec>& song,
+                                      const std::vector<Vec>& acc, double strength, double sigmaTime,
+                                      const std::stop_token& stopToken) {
+    if (song.empty() || acc.empty())
+        return {};
+    const size_t outChannels = std::min<size_t>(2, song.size());
+    const size_t refChannels = std::min<size_t>(2, acc.size());
+    size_t targetLength = song[0].size();
+    for (size_t c = 0; c < outChannels; ++c)
+        targetLength = std::min(targetLength, song[c].size());
+    for (size_t c = 0; c < refChannels; ++c)
+        targetLength = std::min(targetLength, acc[c].size());
+    if (targetLength == 0)
+        return {};
+
+    std::vector<std::vector<CVec>> Y;
+    std::vector<std::vector<CVec>> A;
+    size_t frameCount = std::numeric_limits<size_t>::max();
+    for (size_t c = 0; c < outChannels; ++c) {
+        auto spectrum = stft(song[c], kLosslessNfft, kLosslessHop, stopToken);
+        if (spectrum.empty())
+            return {};
+        frameCount = std::min(frameCount, spectrum.size());
+        Y.push_back(std::move(spectrum));
+    }
+    for (size_t c = 0; c < refChannels; ++c) {
+        auto spectrum = stft(acc[c], kLosslessNfft, kLosslessHop, stopToken);
+        if (spectrum.empty())
+            return {};
+        frameCount = std::min(frameCount, spectrum.size());
+        A.push_back(std::move(spectrum));
+    }
+    const int frames = static_cast<int>(frameCount);
+    const int bins = static_cast<int>(Y[0][0].size());
+    for (auto& channel : Y)
+        channel.resize(frameCount);
+    for (auto& channel : A)
+        channel.resize(frameCount);
+    const int radius = std::max(2, static_cast<int>(std::lround(2.0 * sigmaTime)));
+
+    Vec r00(frameCount), r11(frameCount), r01r(frameCount), r01i(frameCount);
+    Vec syy(frameCount), s0r(frameCount), s0i(frameCount), s1r(frameCount), s1i(frameCount);
+    constexpr double kGateLow = 0.08;
+    constexpr double kGateHigh = 0.58;
+    constexpr double kRidge = 0.006;
+    constexpr double kEps = 1e-12;
+    for (int k = 0; k < bins; ++k) {
+        if ((k & 31) == 0 && stopToken.stop_requested())
+            return {};
+        for (int f = 0; f < frames; ++f) {
+            const std::complex<double> a0 = A[0][static_cast<size_t>(f)][static_cast<size_t>(k)];
+            const std::complex<double> a1 =
+                refChannels > 1 ? A[1][static_cast<size_t>(f)][static_cast<size_t>(k)] : std::complex<double>{};
+            r00[static_cast<size_t>(f)] = std::norm(a0);
+            r11[static_cast<size_t>(f)] = std::norm(a1);
+            const std::complex<double> r01 = a0 * std::conj(a1);
+            r01r[static_cast<size_t>(f)] = r01.real();
+            r01i[static_cast<size_t>(f)] = r01.imag();
+        }
+        boxSmooth(r00, radius);
+        boxSmooth(r00, radius);
+        if (refChannels > 1) {
+            boxSmooth(r11, radius);
+            boxSmooth(r11, radius);
+            boxSmooth(r01r, radius);
+            boxSmooth(r01r, radius);
+            boxSmooth(r01i, radius);
+            boxSmooth(r01i, radius);
+        }
+
+        for (size_t oc = 0; oc < outChannels; ++oc) {
+            for (int f = 0; f < frames; ++f) {
+                const std::complex<double> y = Y[oc][static_cast<size_t>(f)][static_cast<size_t>(k)];
+                const std::complex<double> a0 = A[0][static_cast<size_t>(f)][static_cast<size_t>(k)];
+                const std::complex<double> a1 =
+                    refChannels > 1 ? A[1][static_cast<size_t>(f)][static_cast<size_t>(k)] : std::complex<double>{};
+                const std::complex<double> s0 = y * std::conj(a0);
+                const std::complex<double> s1 = y * std::conj(a1);
+                syy[static_cast<size_t>(f)] = std::norm(y);
+                s0r[static_cast<size_t>(f)] = s0.real();
+                s0i[static_cast<size_t>(f)] = s0.imag();
+                s1r[static_cast<size_t>(f)] = s1.real();
+                s1i[static_cast<size_t>(f)] = s1.imag();
+            }
+            boxSmooth(syy, radius);
+            boxSmooth(syy, radius);
+            boxSmooth(s0r, radius);
+            boxSmooth(s0r, radius);
+            boxSmooth(s0i, radius);
+            boxSmooth(s0i, radius);
+            if (refChannels > 1) {
+                boxSmooth(s1r, radius);
+                boxSmooth(s1r, radius);
+                boxSmooth(s1i, radius);
+                boxSmooth(s1i, radius);
+            }
+
+            for (int f = 0; f < frames; ++f) {
+                const size_t fi = static_cast<size_t>(f);
+                const std::complex<double> s0(s0r[fi], s0i[fi]);
+                const std::complex<double> s1(s1r[fi], s1i[fi]);
+                std::complex<double> h0, h1;
+                double explained = 0.0;
+                if (refChannels == 1) {
+                    const double lambda = kRidge * r00[fi] + kEps;
+                    h0 = s0 / (r00[fi] + lambda);
+                    explained = std::real(h0 * std::conj(s0));
+                } else {
+                    const double trace = r00[fi] + r11[fi];
+                    const double lambda = kRidge * trace + kEps;
+                    const double d0 = r00[fi] + lambda;
+                    const double d1 = r11[fi] + lambda;
+                    const std::complex<double> c01(r01r[fi], r01i[fi]);
+                    const double det = std::max(kEps, d0 * d1 - std::norm(c01));
+                    h0 = (s0 * d1 - s1 * std::conj(c01)) / det;
+                    h1 = (s1 * d0 - s0 * c01) / det;
+                    explained = std::real(h0 * std::conj(s0) + h1 * std::conj(s1));
+                }
+                auto capTransfer = [](std::complex<double>& h) {
+                    constexpr double kMax = 3.0;
+                    const double magnitude = std::abs(h);
+                    if (magnitude > kMax)
+                        h *= kMax / magnitude;
+                };
+                capTransfer(h0);
+                capTransfer(h1);
+                const double coherence = std::clamp(explained / (syy[fi] + kEps), 0.0, 1.0);
+                const double gate = smoothstep(kGateLow, kGateHigh, coherence);
+                const std::complex<double> a0 = A[0][fi][static_cast<size_t>(k)];
+                const std::complex<double> a1 =
+                    refChannels > 1 ? A[1][fi][static_cast<size_t>(k)] : std::complex<double>{};
+                std::complex<double> cancel = gate * (h0 * a0 + h1 * a1);
+                const std::complex<double> y = Y[oc][fi][static_cast<size_t>(k)];
+                const double cm = std::abs(cancel);
+                const double limit = 1.08 * std::abs(y);
+                if (cm > limit && limit > 0.0)
+                    cancel *= limit / cm;
+                Y[oc][fi][static_cast<size_t>(k)] = y - strength * cancel;
+            }
+        }
+    }
+
+    std::vector<Vec> timeDomain;
+    timeDomain.reserve(outChannels);
+    for (auto& channel : Y) {
+        Vec y = istft(channel, kLosslessHop, stopToken);
+        y.resize(targetLength, 0.0);
+        timeDomain.push_back(std::move(y));
+    }
+    return timeDomain;
 }
 
 } // namespace
 
-Vec processChannel(const Vec& song, const Vec& acc, int sr, int nFft, int hop, double strength,
-                   Algorithm algo, double sigmaTime, const std::stop_token& stopToken) {
-    if (song.empty() || acc.empty() || sr <= 0 || !std::isfinite(strength) ||
-        !std::isfinite(sigmaTime))
+Vec processChannel(const Vec& song, const Vec& acc, int sr, int nFft, int hop, double strength, Algorithm algo,
+                   double sigmaTime, const std::stop_token& stopToken) {
+    if (song.empty() || acc.empty() || sr <= 0 || !std::isfinite(strength) || !std::isfinite(sigmaTime))
         return {};
     strength = std::clamp(strength, 0.0, 1.0);
     sigmaTime = std::max(0.0, sigmaTime);
@@ -1004,7 +1124,9 @@ Vec processChannel(const Vec& song, const Vec& acc, int sr, int nFft, int hop, d
                     Y_song[static_cast<size_t>(f)][static_cast<size_t>(k)] * m;
             }
         }
-        return istft(Yvocal, hop, stopToken);
+        Vec output = istft(Yvocal, hop, stopToken);
+        output.resize(std::min(song.size(), acc.size()), 0.0);
+        return output;
     }
 
     const std::vector<double> freqs = fftFrequencies(sr, nFft);
@@ -1065,7 +1187,33 @@ Vec processChannel(const Vec& song, const Vec& acc, int sr, int nFft, int hop, d
             Yvocal[static_cast<size_t>(f)][static_cast<size_t>(k)] = out;
         }
     }
-    return istft(Yvocal, hop, stopToken);
+    Vec output = istft(Yvocal, hop, stopToken);
+    output.resize(std::min(song.size(), acc.size()), 0.0);
+    return output;
+}
+
+std::vector<Vec> processStereo(const std::vector<Vec>& song, const std::vector<Vec>& acc, int sr,
+                               int nFft, int hop, double strength, Algorithm algo,
+                               double sigmaTime, const std::stop_token& stopToken) {
+    if (song.empty() || acc.empty() || sr <= 0 || !std::isfinite(strength) ||
+        !std::isfinite(sigmaTime))
+        return {};
+    strength = std::clamp(strength, 0.0, 1.0);
+    sigmaTime = std::max(0.0, sigmaTime);
+    if (algo == Algorithm::Lossless)
+        return losslessCancelStereo(song, acc, strength, sigmaTime, stopToken);
+
+    std::vector<Vec> output;
+    output.reserve(song.size());
+    for (size_t c = 0; c < song.size(); ++c) {
+        const Vec& reference = acc[std::min(c, acc.size() - 1U)];
+        Vec channel = processChannel(song[c], reference, sr, nFft, hop, strength, algo,
+                                     sigmaTime, stopToken);
+        if (channel.empty())
+            return {};
+        output.push_back(std::move(channel));
+    }
+    return output;
 }
 
 } // namespace dsp
