@@ -1,7 +1,0 @@
-subdir('dsp')
-subdir('neural')
-subdir('audio')
-subdir('i18n')
-subdir('core')
-subdir('ui')
-subdir('app')

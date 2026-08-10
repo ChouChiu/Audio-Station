@@ -1,0 +1,108 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "audio-station"
+version = "1.0.0"
+description = "Reference-guided and neural vocal separation with a PySide6 Fluent UI"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "AGPL-3.0-or-later" }
+authors = [{ name = "Audio Station contributors" }]
+dependencies = [
+  "numpy>=2.0,<3",
+  "onnxruntime>=1.20,<2",
+  "PySide6>=6.8,<7",
+  "PySide6-Fluent-Widgets[full]>=1.11.3,<2",
+  "scipy>=1.14,<2",
+  "soundfile>=0.13,<1",
+  "soxr>=0.5,<1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "build>=1.2,<2",
+  "hatchling>=1.27",
+  "pytest>=8.3,<10",
+  "pytest-qt>=4.4,<5",
+  "ruff>=0.12,<1",
+]
+deploy = ["nuitka==4.1.3", "ordered-set", "zstandard", "patchelf; sys_platform == 'linux'"]
+
+[project.scripts]
+audio-station = "audio_station.entrypoints.cli:main"
+
+[project.urls]
+Documentation = "https://qfluentwidgets.com/"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/audio_station"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "src/audio_station",
+  "tests",
+  "deployment",
+  "README.md",
+  "LICENSE",
+  "pyproject.toml",
+  "pysidedeploy.spec",
+]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]
+markers = ["slow: resource-intensive acceptance tests", "model: requires local ONNX weights"]
+
+[tool.pyside6-project]
+files = [
+  "deployment/main.py",
+  "src/audio_station/__init__.py",
+  "src/audio_station/__main__.py",
+  "src/audio_station/application/__init__.py",
+  "src/audio_station/application/finder.py",
+  "src/audio_station/application/i18n.py",
+  "src/audio_station/application/logging.py",
+  "src/audio_station/application/models.py",
+  "src/audio_station/application/processing.py",
+  "src/audio_station/application/update.py",
+  "src/audio_station/audio/__init__.py",
+  "src/audio_station/audio/io.py",
+  "src/audio_station/dsp/__init__.py",
+  "src/audio_station/dsp/algorithms/__init__.py",
+  "src/audio_station/dsp/algorithms/reference.py",
+  "src/audio_station/dsp/alignment/__init__.py",
+  "src/audio_station/dsp/alignment/time_alignment.py",
+  "src/audio_station/dsp/transforms/__init__.py",
+  "src/audio_station/dsp/transforms/spectral.py",
+  "src/audio_station/entrypoints/__init__.py",
+  "src/audio_station/entrypoints/cli.py",
+  "src/audio_station/entrypoints/gui.py",
+  "src/audio_station/neural/__init__.py",
+  "src/audio_station/neural/catalog.py",
+  "src/audio_station/neural/mdxnet.py",
+  "src/audio_station/neural/model_store.py",
+  "src/audio_station/presentation/__init__.py",
+  "src/audio_station/presentation/config.py",
+  "src/audio_station/presentation/main_window.py",
+  "src/audio_station/presentation/pages/__init__.py",
+  "src/audio_station/presentation/pages/ai.py",
+  "src/audio_station/presentation/pages/home.py",
+  "src/audio_station/presentation/pages/mr.py",
+  "src/audio_station/presentation/pages/settings.py",
+  "src/audio_station/presentation/widgets/__init__.py",
+  "src/audio_station/presentation/widgets/cards.py",
+  "src/audio_station/presentation/widgets/combo_box.py",
+  "src/audio_station/presentation/worker.py",
+  "src/audio_station/resources/__init__.py",
+]

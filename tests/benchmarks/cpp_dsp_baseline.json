@@ -1,0 +1,21 @@
+{
+  "source": "C++ HEAD 33e67a7 before the Python rewrite; synthetic regression evidence only",
+  "align_corr": 1.0,
+  "algorithms": {
+    "soft_mask": {"r_vocal": 0.852410, "r_inst": 0.522805},
+    "spectral_subtraction": {"r_vocal": 0.933143, "r_inst": 0.358891},
+    "wiener_filter": {"r_vocal": 0.866756, "r_inst": 0.498612},
+    "frequency_weighted": {"r_vocal": 0.823278, "r_inst": 0.567623},
+    "binary_mask": {"r_vocal": 0.794074, "r_inst": 0.607817},
+    "phase_sensitive": {"r_vocal": 0.892775, "r_inst": 0.449745},
+    "lossless": {"r_vocal": 0.933074, "r_inst": 0.358927}
+  },
+  "scenes": {
+    "tempo_drift_0p4": {"r_vocal": 0.999357, "r_inst": -0.001678},
+    "tempo_drift_1pct": {"r_vocal": 0.997157, "r_inst": 0.000383},
+    "timing_jitter": {"r_vocal": 0.963743, "r_inst": 0.004866},
+    "audience_preservation": {"r_vocal": 0.975189, "r_noise_out": 0.999269},
+    "stereo_mimo": {"r_vocal_min": 0.999619, "r_ref_max": 0.003764}
+  }
+}
+
