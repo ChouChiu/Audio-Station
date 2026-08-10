@@ -104,6 +104,7 @@ class MainWindow(FluentWindow):
             self.mr.acc_edit.setText(str(match.path))
             self.mr.status.setText(tr(self.language, "auto_found"))
         else:
+            self.mr.acc_edit.clear()
             self.mr.status.setText(tr(self.language, "auto_not_found"))
 
     def start_reference(self) -> None:
@@ -115,14 +116,23 @@ class MainWindow(FluentWindow):
         if not self.mr.acc_edit.text():
             self._warning("warn_no_acc")
             return
-        if not self.mr.output_edit.text():
+        output = self.mr.normalized_output_path()
+        if output is None:
             self._warning("warn_no_out")
+            return
+        song = Path(self.mr.song_edit.text()).expanduser().resolve()
+        accompaniment = Path(self.mr.acc_edit.text()).expanduser().resolve()
+        if song == accompaniment:
+            self._warning("warn_same_inputs")
+            return
+        if output in {song, accompaniment}:
+            self._warning("warn_output_conflict")
             return
         try:
             job = ReferenceJob(
-                Path(self.mr.song_edit.text()),
-                Path(self.mr.acc_edit.text()),
-                Path(self.mr.output_edit.text()),
+                song,
+                accompaniment,
+                output,
                 Algorithm(self.mr.algorithm.currentData()),
                 self.mr.strength.value(),
                 int(self.mr.sigma.currentData()),
@@ -136,6 +146,7 @@ class MainWindow(FluentWindow):
         cfg.set(cfg.sigma, job.sigma)
         cfg.set(cfg.auto_align, job.auto_align)
         cfg.set(cfg.auto_find, self.mr.auto_find.isChecked())
+        self.mr.clear_result()
         self._start_worker(self.mr, partial(run_reference_job, job))
 
     def start_neural(self) -> None:
@@ -190,6 +201,9 @@ class MainWindow(FluentWindow):
             self.state_tip.setState(True)
             self.state_tip = None
         outputs = "\n".join(map(str, result.outputs))
+        if isinstance(self.active_page, MrPage) and result.outputs:
+            stats = result.audio_stats[0] if result.audio_stats else None
+            self.active_page.set_result(result.outputs[0], stats)
         InfoBar.success(
             tr(self.language, "done_title"),
             outputs,
@@ -234,6 +248,7 @@ class MainWindow(FluentWindow):
             self.worker.request_cancel()
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        self.mr.stop_preview()
         if self.worker:
             self.close_pending = True
             self.worker.request_cancel()

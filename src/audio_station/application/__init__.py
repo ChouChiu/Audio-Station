@@ -1,5 +1,6 @@
 from .models import (
     Algorithm,
+    AudioStats,
     CancellationToken,
     NeuralJob,
     ProcessingResult,
@@ -9,6 +10,7 @@ from .models import (
 
 __all__ = [
     "Algorithm",
+    "AudioStats",
     "CancellationToken",
     "NeuralJob",
     "ProcessingResult",

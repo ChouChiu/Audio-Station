@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from PySide6.QtCore import QStandardPaths
@@ -29,10 +30,10 @@ class AppConfig(QConfig):
     algorithm = OptionsConfigItem(
         "Reference",
         "Algorithm",
-        "lossless",
+        "reference_center",
         OptionsValidator(
             [
-                "lossless",
+                "reference_center",
                 "soft_mask",
                 "spectral_subtraction",
                 "wiener_filter",
@@ -61,4 +62,12 @@ def load_config() -> None:
     directory = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppConfigLocation)
     path = Path(directory or Path.home() / ".config/audio-station") / "config.json"
     path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        stored = json.loads(path.read_text(encoding="utf-8"))
+        stored_algorithm = stored.get("Reference", {}).get("Algorithm")
+    except (AttributeError, OSError, TypeError, ValueError):
+        stored_algorithm = None
     qconfig.load(str(path), cfg)
+    if stored_algorithm in {"lossless", "lossless_center"}:
+        cfg.set(cfg.algorithm, "reference_center", save=False)
+        qconfig.save()

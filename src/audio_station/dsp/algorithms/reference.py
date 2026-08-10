@@ -31,9 +31,68 @@ def _smooth_complex(values: np.ndarray, sigma_time: float) -> np.ndarray:
     return _smooth(values.real, sigma_time) + 1j * _smooth(values.imag, sigma_time)
 
 
+def _time_sigma(sigma: float, sample_rate: int, hop: int) -> float:
+    """Keep smoothing duration stable when the input sample rate changes."""
+    return max(float(sigma) * sample_rate / (44_100.0 * hop / 512.0), 0.0)
+
+
 def _smoothstep(low: float, high: float, values: np.ndarray) -> np.ndarray:
     x = np.clip((values - low) / (high - low), 0.0, 1.0)
     return x * x * (3.0 - 2.0 * x)
+
+
+def _phantom_center_focus(
+    spectra: list[np.ndarray], sample_rate: int, sigma_time: float
+) -> list[np.ndarray]:
+    """Keep the coherent phantom center without treating Mid as the center.
+
+    A hard-panned source contributes to Mid in a conventional M/S split.  Here it
+    receives a low score because the opposite channel has neither matching power
+    nor stable phase.  The statistics are deliberately smoothed before making a
+    mask; this trades a little spatial precision for fewer musical-noise artifacts.
+    """
+    if len(spectra) < 2:
+        return spectra
+    left, right = spectra[:2]
+    epsilon = 1e-10
+    # Phantom Center's Smooth control is most useful as an artifact guard.  Keep
+    # at least about 70 ms of context even when reference cancellation is set fast.
+    smooth = max(float(sigma_time), 6.0 * sample_rate / 44_100.0)
+    left_power = _smooth(np.abs(left) ** 2, smooth)
+    right_power = _smooth(np.abs(right) ** 2, smooth)
+    cross = _smooth_complex(left * np.conj(right), smooth)
+
+    coherence = np.clip(np.abs(cross) ** 2 / (left_power * right_power + epsilon), 0.0, 1.0)
+    phase_delta = np.angle(cross)
+    half_delta = 0.5 * np.abs(phase_delta)
+    phase_overlap = np.maximum(0.0, np.cos(half_delta) - np.sin(half_delta))
+    coherence_gate = _smoothstep(0.03, 0.35, coherence)
+
+    # The common amplitude follows Phantom Center's observable LCR behaviour:
+    # equal in-phase channels pass unchanged, a same-phase panned source contributes
+    # the quieter channel, and phase offsets taper to zero at 90 degrees.
+    left_amplitude = np.sqrt(left_power)
+    right_amplitude = np.sqrt(right_power)
+    common_amplitude = np.minimum(left_amplitude, right_amplitude) * phase_overlap * coherence_gate
+    left_to_center = common_amplitude / (left_amplitude + epsilon) * np.exp(-0.5j * phase_delta)
+    right_to_center = common_amplitude / (right_amplitude + epsilon) * np.exp(0.5j * phase_delta)
+    center = 0.5 * (left_to_center * left + right_to_center * right)
+
+    frequencies = fft_frequencies(sample_rate, 2 * (left.shape[1] - 1))
+    high_pass = _smoothstep(80.0, 160.0, frequencies)
+    low_pass = 1.0 - _smoothstep(9_000.0, 14_000.0, frequencies)
+    vocal_band = high_pass * low_pass
+
+    # Live lead vocals are not a mathematically perfect center after venue reverb,
+    # camera processing and reference cancellation.  Keep a generous dry floor and
+    # lift only the coherent center so the spatial cleanup does not push the singer
+    # behind the residual crowd.
+    side_floor = 0.35
+    center_gain = 1.25
+    band = vocal_band[None, :]
+    focused_left = side_floor * left + (center_gain - side_floor) * center
+    focused_right = side_floor * right + (center_gain - side_floor) * center
+    return [left + band * (focused_left - left), right + band * (focused_right - right)]
 
 
 def _content_frequencies(ref_spec: np.ndarray, sample_rate: int, hop: int) -> np.ndarray:
@@ -94,7 +153,7 @@ def _compensate_drift(
     return ref_spec * np.exp(1j * phase)
 
 
-def _lossless_channel(
+def _reference_center_channel(
     song_spec: np.ndarray,
     ref_spec: np.ndarray,
     strength: float,
@@ -104,9 +163,10 @@ def _lossless_channel(
 ):
     epsilon = 1e-10
     ref_spec = _compensate_drift(song_spec, ref_spec, sample_rate, hop)
-    cross = _smooth_complex(song_spec * np.conj(ref_spec), sigma)
-    ref_power = _smooth(np.abs(ref_spec) ** 2, sigma)
-    song_power = _smooth(np.abs(song_spec) ** 2, sigma)
+    smooth = _time_sigma(sigma, sample_rate, hop)
+    cross = _smooth_complex(song_spec * np.conj(ref_spec), smooth)
+    ref_power = _smooth(np.abs(ref_spec) ** 2, smooth)
+    song_power = _smooth(np.abs(song_spec) ** 2, smooth)
     transfer = cross / (ref_power + epsilon)
     magnitude = np.abs(transfer)
     transfer *= np.minimum(1.0, 2.0 / (magnitude + epsilon))
@@ -118,7 +178,7 @@ def _lossless_channel(
     return song_spec - strength * gate * prediction
 
 
-def _lossless_stereo(
+def _reference_center_stereo(
     song: np.ndarray,
     reference: np.ndarray,
     sample_rate: int,
@@ -135,7 +195,7 @@ def _lossless_stereo(
                     reference[min(c, reference.shape[0] - 1)],
                     sample_rate,
                     strength,
-                    Algorithm.LOSSLESS,
+                    Algorithm.REFERENCE_CENTER,
                     sigma,
                     token=token,
                 )
@@ -156,31 +216,64 @@ def _lossless_stereo(
     x = [channel * ratio for channel in x]
     token.raise_if_cancelled()
     epsilon = 1e-9
-    r11 = _smooth(np.abs(x[0]) ** 2, sigma)
-    r22 = _smooth(np.abs(x[1]) ** 2, sigma)
-    r12 = _smooth_complex(x[0] * np.conj(x[1]), sigma)
+    smooth = _time_sigma(sigma, sample_rate, 512)
+    r11 = _smooth(np.abs(x[0]) ** 2, smooth)
+    r22 = _smooth(np.abs(x[1]) ** 2, smooth)
+    r12 = _smooth_complex(x[0] * np.conj(x[1]), smooth)
     trace = r11 + r22
     regularizer = 1e-5 * trace + epsilon
     a11, a22 = r11 + regularizer, r22 + regularizer
     determinant = a11 * a22 - np.abs(r12) ** 2
     determinant = np.maximum(determinant, epsilon)
-    outputs = []
+    residuals = []
     for mixture in y:
-        b1 = _smooth_complex(mixture * np.conj(x[0]), sigma)
-        b2 = _smooth_complex(mixture * np.conj(x[1]), sigma)
+        b1 = _smooth_complex(mixture * np.conj(x[0]), smooth)
+        b2 = _smooth_complex(mixture * np.conj(x[1]), smooth)
         h1 = (b1 * a22 - b2 * np.conj(r12)) / determinant
         h2 = (b2 * a11 - b1 * r12) / determinant
         for transfer in (h1, h2):
             magnitude = np.abs(transfer)
             transfer *= np.minimum(1.0, 2.0 / (magnitude + epsilon))
         prediction = h1 * x[0] + h2 * x[1]
-        mixture_power = _smooth(np.abs(mixture) ** 2, sigma)
-        prediction_power = _smooth(np.abs(prediction) ** 2, sigma)
+        mixture_power = _smooth(np.abs(mixture) ** 2, smooth)
+        prediction_power = _smooth(np.abs(prediction) ** 2, smooth)
         reliability = np.clip(prediction_power / (mixture_power + epsilon), 0.0, 1.0)
         gate = _smoothstep(0.04, 0.35, reliability)
         prediction *= np.minimum(1.0, np.abs(mixture) / (np.abs(prediction) + epsilon))
-        outputs.append(istft(mixture - strength * gate * prediction, length=length))
-    return np.asarray(outputs, dtype=np.float64)
+        residuals.append(mixture - strength * gate * prediction)
+    # The spatial stage only needs the two residual spectra.  Releasing MIMO
+    # workspaces here keeps long-file peak RSS below the disk-buffered pipeline's
+    # acceptance limit without changing any samples.
+    del (
+        a11,
+        a22,
+        b1,
+        b2,
+        combined_reference,
+        combined_song,
+        compensated,
+        determinant,
+        gate,
+        h1,
+        h2,
+        magnitude,
+        mixture,
+        mixture_power,
+        prediction,
+        prediction_power,
+        r11,
+        r12,
+        r22,
+        ratio,
+        reliability,
+        regularizer,
+        trace,
+        transfer,
+        x,
+        y,
+    )
+    residuals = _phantom_center_focus(residuals, sample_rate, smooth)
+    return np.asarray([istft(values, length=length) for values in residuals], dtype=np.float64)
 
 
 def process_channel(
@@ -212,8 +305,8 @@ def process_channel(
     y_mag, x_mag = np.abs(y), np.abs(x)
     adjusted = strength * x_mag
     epsilon = 1e-10
-    if algorithm == Algorithm.LOSSLESS:
-        output_spec = _lossless_channel(y, x, strength, sigma, sample_rate, hop)
+    if algorithm == Algorithm.REFERENCE_CENTER:
+        output_spec = _reference_center_channel(y, x, strength, sigma, sample_rate, hop)
     elif algorithm == Algorithm.SOFT_MASK:
         mask = y_mag**2 / (y_mag**2 + adjusted**2 + epsilon)
         output_spec = y * mask
@@ -253,8 +346,15 @@ def _process_block(
     sigma: float,
     token: CancellationToken,
 ) -> np.ndarray:
-    if algorithm == Algorithm.LOSSLESS and song.shape[0] >= 2 and reference.shape[0] >= 2:
-        return _lossless_stereo(song[:2], reference[:2], sample_rate, strength, sigma, token)
+    if algorithm == Algorithm.REFERENCE_CENTER and song.shape[0] >= 2 and reference.shape[0] >= 2:
+        return _reference_center_stereo(
+            song[:2],
+            reference[:2],
+            sample_rate,
+            strength,
+            sigma,
+            token,
+        )
     return np.stack(
         [
             process_channel(
@@ -332,11 +432,11 @@ def process_audio(
     for start in range(0, length, cleanup_block):
         view = result[:, start : start + cleanup_block]
         np.nan_to_num(view, copy=False)
-        if algorithm == Algorithm.LOSSLESS:
+        if algorithm == Algorithm.REFERENCE_CENTER:
             peak = max(peak, float(np.max(np.abs(view), initial=0.0)))
         else:
             np.clip(view, -1.0, 1.0, out=view)
-    if algorithm == Algorithm.LOSSLESS and peak > 0.999:
+    if algorithm == Algorithm.REFERENCE_CENTER and peak > 0.999:
         scale = 0.999 / peak
         for start in range(0, length, cleanup_block):
             result[:, start : start + cleanup_block] *= scale

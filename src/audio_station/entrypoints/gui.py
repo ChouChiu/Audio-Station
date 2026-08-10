@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import signal
 import sys
 from contextlib import redirect_stdout
 
@@ -33,4 +34,12 @@ def run_gui(selftest: bool = False) -> int:
     window.show()
     if selftest:
         QTimer.singleShot(600, app.quit)
-    return app.exec()
+    previous_sigint_handler = signal.getsignal(signal.SIGINT)
+    signal.signal(signal.SIGINT, lambda _signum, _frame: app.quit())
+    signal_timer = QTimer()
+    signal_timer.timeout.connect(lambda: None)
+    signal_timer.start(250)
+    try:
+        return app.exec()
+    finally:
+        signal.signal(signal.SIGINT, previous_sigint_handler)

@@ -7,11 +7,12 @@ Audio Station 是使用 Python、PySide6 与 PySide6-Fluent-Widgets 重写的桌
 - Fluent Design 四页桌面界面，支持浅色、深色和跟随系统主题
 - 中文、日本語、한국어即时切换
 - 自动匹配参考伴奏、GCC-PHAT 全局对齐和局部时钟漂移跟踪
-- 7 种参考对消算法，包括立体声 2×2 MIMO 无损模式
+- 7 种参考对消算法，包括立体声 2×2 MIMO 参考对消 + 中心聚焦模式
 - UVR MDX-Net ONNX 推理，模型按需下载并校验 SHA-256
 - GUI 和现代子命令 CLI 共用同一处理管线
 - WAV、FLAC、OGG、MP3 等 libsndfile 格式，并通过 Qt Multimedia 回退解码 M4A 等格式
-- PCM 24-bit 无损模式输出，其余模式输出 PCM 16-bit WAV
+- 参考对消 + 中心聚焦模式输出 PCM 24-bit，其余模式输出 PCM 16-bit WAV
+- 输出文件名可直接编辑；处理完成后可在应用内试听、拖动定位，并查看时长、采样率、位深、峰值、RMS 与文件大小
 - 设置页可即时切换并持久化 `DEBUG`、`INFO`、`WARNING`、`ERROR`、`CRITICAL` 日志等级
 
 Python、后台任务和 Qt 消息统一使用单行日志格式：
@@ -50,7 +51,7 @@ python -m audio_station
 
 ```bash
 audio-station mr <song> <accompaniment> <output.wav> \
-  --algorithm lossless --strength 75 --sigma 8 --align --lang zh_cn
+  --algorithm reference_center --strength 75 --sigma 8 --align --lang zh_cn
 ```
 
 AI 人声提取：
@@ -60,7 +61,7 @@ audio-station ai <song> \
   [--output-dir <directory>] [--model mdxnet_1] [--models-dir <directory>]
 ```
 
-算法键名为 `lossless`、`soft_mask`、`spectral_subtraction`、`wiener_filter`、`frequency_weighted`、`binary_mask`、`phase_sensitive`。
+算法键名为 `reference_center`、`soft_mask`、`spectral_subtraction`、`wiener_filter`、`frequency_weighted`、`binary_mask`、`phase_sensitive`。`reference_center` 会在参考伴奏对消后，以声道间相位、共有幅度、相干性和时间平滑聚焦真正的幻象中心；它不像普通 M/S 那样把硬声像信号也算作中心，并保留部分侧声以保护现场人声、和声和混响。
 
 AI 模型输出 `<歌曲名>_vocal.wav` 与 `<歌曲名>_background.wav`。模型搜索顺序为 `--models-dir`、`MR_REMOVER_MODELS`、系统应用数据目录、开发仓库 `models/`。权重缺失时会从 UVR 模型仓库下载到系统应用数据目录；模型不会打入 Python wheel 或 standalone 程序。
 
@@ -97,7 +98,7 @@ QT_QPA_PLATFORM=offscreen .venv/bin/audio-station --selftest
 python -m build
 ```
 
-测试覆盖 STFT/iSTFT、全部参考算法、时间对齐、立体声 MIMO、音频读写、重采样、伴奏匹配、翻译、MDX-Net 分块重叠相加、GUI 导航及端到端参考处理。`--runslow` 会执行 15 分钟、44.1 kHz、双声道 lossless RSS/长度/接缝门禁，目标峰值为 1.5 GiB。合成 DSP 指标只用于回归，不代表真实音乐数据集表现。
+测试覆盖 STFT/iSTFT、全部参考算法、时间对齐、立体声 MIMO、音频读写、重采样、伴奏匹配、翻译、MDX-Net 分块重叠相加、GUI 导航及端到端参考处理。`--runslow` 会执行 15 分钟、44.1 kHz、双声道 `reference_center` RSS/长度/接缝门禁，目标峰值为 1.5 GiB。合成 DSP 指标只用于回归，不代表真实音乐数据集表现。
 
 ## Linux standalone 发布
 

@@ -24,6 +24,12 @@ from audio_station.application.processing import run_neural_job, run_reference_j
 from audio_station.neural import DEFAULT_MODEL_ID, model_catalog
 
 
+def _algorithm_key(value: str) -> str:
+    if value in {"lossless", "lossless_center"}:
+        return Algorithm.REFERENCE_CENTER.value
+    return value
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="audio-station", description="Vocal and accompaniment separation"
@@ -37,7 +43,10 @@ def build_parser() -> argparse.ArgumentParser:
     reference.add_argument("accompaniment", type=Path)
     reference.add_argument("output", type=Path)
     reference.add_argument(
-        "--algorithm", choices=[item.value for item in Algorithm], default="lossless"
+        "--algorithm",
+        type=_algorithm_key,
+        choices=[item.value for item in Algorithm],
+        default=Algorithm.REFERENCE_CENTER.value,
     )
     reference.add_argument(
         "--strength", type=int, choices=range(0, 101), default=75, metavar="0..100"

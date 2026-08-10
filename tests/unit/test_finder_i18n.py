@@ -16,6 +16,21 @@ def test_accompaniment_finder(tmp_path: Path):
     assert find_best_match(song).path == expected
 
 
+def test_accompaniment_finder_excludes_source_alias(tmp_path: Path):
+    song = tmp_path / "Artist - Song.wav"
+    song.touch()
+    (tmp_path / "Artist - Song instrumental.wav").symlink_to(song)
+    assert not find_best_match(song).found
+
+
+def test_accompaniment_finder_excludes_generated_output(tmp_path: Path):
+    song = tmp_path / "Artist - Song.wav"
+    song.touch()
+    (tmp_path / "Artist - Song_vocals.wav").touch()
+    (tmp_path / "Artist - Song 消音.wav").touch()
+    assert not find_best_match(song).found
+
+
 def test_translation_tables_have_identical_keys():
     tables = [
         json.loads(resource_path(f"i18n/{lang}.json").read_text(encoding="utf-8"))

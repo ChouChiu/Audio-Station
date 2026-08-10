@@ -5,6 +5,7 @@ from difflib import SequenceMatcher
 from pathlib import Path
 
 _KEYWORDS = ("伴奏", "accompaniment", "instrumental", "inst", "karaoke", "off vocal", "minus one")
+_OUTPUT_MARKERS = ("_vocals", "-vocals", "消音")
 _EXTENSIONS = {".mp3", ".wav", ".flac", ".m4a", ".ogg", ".opus"}
 
 
@@ -28,16 +29,19 @@ def find_best_match(song: Path, minimum_score: float = 0.5) -> Match:
         return Match()
     best = Match()
     for candidate in sorted(source.parent.iterdir()):
+        resolved_candidate = candidate.expanduser().resolve()
         if (
-            candidate == source
+            resolved_candidate == source
             or not candidate.is_file()
             or candidate.suffix.casefold() not in _EXTENSIONS
         ):
             continue
         name = candidate.stem.casefold()
+        if any(marker in name for marker in _OUTPUT_MARKERS):
+            continue
         score = filename_similarity(source.stem, name)
         if any(keyword in name for keyword in _KEYWORDS):
             score += 0.2
         if score > best.score:
-            best = Match(candidate, score)
+            best = Match(resolved_candidate, score)
     return best if best.score > minimum_score else Match()

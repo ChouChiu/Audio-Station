@@ -8,7 +8,7 @@ from threading import Event
 
 
 class Algorithm(StrEnum):
-    LOSSLESS = "lossless"
+    REFERENCE_CENTER = "reference_center"
     SOFT_MASK = "soft_mask"
     SPECTRAL_SUBTRACTION = "spectral_subtraction"
     WIENER_FILTER = "wiener_filter"
@@ -22,7 +22,7 @@ class ReferenceJob:
     song: Path
     accompaniment: Path
     output: Path
-    algorithm: Algorithm = Algorithm.LOSSLESS
+    algorithm: Algorithm = Algorithm.REFERENCE_CENTER
     strength: int = 75
     sigma: int = 8
     auto_align: bool = True
@@ -51,8 +51,20 @@ class ProgressEvent:
 
 
 @dataclass(frozen=True, slots=True)
+class AudioStats:
+    duration_seconds: float
+    sample_rate: int
+    channels: int
+    bit_depth: int
+    peak_dbfs: float
+    rms_dbfs: float
+    file_size: int
+
+
+@dataclass(frozen=True, slots=True)
 class ProcessingResult:
     outputs: tuple[Path, ...]
+    audio_stats: tuple[AudioStats, ...] = ()
 
 
 @dataclass(slots=True)

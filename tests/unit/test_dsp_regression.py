@@ -10,7 +10,7 @@ def correlation(first, second):
 
 
 @pytest.mark.parametrize("rate", [0.004, 0.01])
-def test_lossless_tracks_tempo_drift(rate):
+def test_reference_center_tracks_tempo_drift(rate):
     sample_rate = 22_050
     length = sample_rate * 5
     time = np.arange(length) / sample_rate
@@ -20,13 +20,13 @@ def test_lossless_tracks_tempo_drift(rate):
     mixture = vocal + drifted
     aligned = align_audio(np.stack([mixture] * 2), np.stack([reference] * 2), sample_rate)
     output = process_audio(
-        np.stack([mixture] * 2), aligned, sample_rate, 1.0, Algorithm.LOSSLESS, 8
+        np.stack([mixture] * 2), aligned, sample_rate, 1.0, Algorithm.REFERENCE_CENTER, 8
     )
     assert correlation(output[0], vocal) > 0.98
     assert abs(correlation(output[0], reference)) < 0.05
 
 
-def test_lossless_preserves_non_reference_audience_noise():
+def test_reference_center_preserves_centered_non_reference_content():
     sample_rate = 22_050
     length = sample_rate * 5
     time = np.arange(length) / sample_rate
@@ -39,14 +39,40 @@ def test_lossless_preserves_non_reference_audience_noise():
         np.stack([reference] * 2),
         sample_rate,
         1.0,
-        Algorithm.LOSSLESS,
+        Algorithm.REFERENCE_CENTER,
         8,
     )
     assert correlation(output[0], vocal) > 0.96
-    assert correlation(output[0] - vocal, noise) > 0.98
+    assert correlation(output[0], vocal + noise) > 0.96
 
 
-def test_alignment_and_lossless_handle_segment_jitter():
+def test_smooth_center_focus_rejects_wide_audience_without_damaging_center_vocal():
+    sample_rate = 22_050
+    length = sample_rate * 5
+    time = np.arange(length) / sample_rate
+    vocal = 0.35 * np.sin(2 * np.pi * 440 * time)
+    left_reference = 0.18 * np.sin(2 * np.pi * 123 * time)
+    right_reference = 0.16 * np.sin(2 * np.pi * 181 * time)
+    rng = np.random.default_rng(7)
+    left_audience = rng.normal(0.0, 0.08, length)
+    right_audience = rng.normal(0.0, 0.08, length)
+    mixture = np.stack(
+        [
+            vocal + left_reference + left_audience,
+            vocal + right_reference + right_audience,
+        ]
+    )
+    reference = np.stack([left_reference, right_reference])
+    focused = process_audio(mixture, reference, sample_rate, 1.0, Algorithm.REFERENCE_CENTER, 8)
+    assert correlation(focused[0], vocal) > 0.98
+    vocal_gain = np.dot(focused[0], vocal) / np.dot(vocal, vocal)
+    assert vocal_gain >= 1.0
+    focused_noise = focused - vocal_gain * vocal
+    original_noise = np.stack([left_audience, right_audience])
+    assert np.sqrt(np.mean(focused_noise**2)) < 0.70 * np.sqrt(np.mean(original_noise**2))
+
+
+def test_alignment_and_reference_center_handle_segment_jitter():
     sample_rate = 22_050
     length = sample_rate * 5
     time = np.arange(length) / sample_rate
@@ -62,7 +88,7 @@ def test_alignment_and_lossless_handle_segment_jitter():
     mixture = vocal + jittered
     aligned = align_audio(np.stack([mixture] * 2), np.stack([reference] * 2), sample_rate)
     output = process_audio(
-        np.stack([mixture] * 2), aligned, sample_rate, 1.0, Algorithm.LOSSLESS, 8
+        np.stack([mixture] * 2), aligned, sample_rate, 1.0, Algorithm.REFERENCE_CENTER, 8
     )
     assert correlation(output[0], vocal) > 0.96
     assert abs(correlation(output[0], reference)) < 0.08

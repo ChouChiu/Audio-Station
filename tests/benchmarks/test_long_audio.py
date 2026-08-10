@@ -35,7 +35,7 @@ def test_fifteen_minute_stereo_rss_length_and_seams():
             reference.samples,
             sample_rate,
             0.75,
-            Algorithm.LOSSLESS,
+            Algorithm.REFERENCE_CENTER,
             8,
             CancellationToken(),
             output.samples,

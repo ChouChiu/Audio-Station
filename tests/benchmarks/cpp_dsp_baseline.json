@@ -8,7 +8,7 @@
     "frequency_weighted": {"r_vocal": 0.823278, "r_inst": 0.567623},
     "binary_mask": {"r_vocal": 0.794074, "r_inst": 0.607817},
     "phase_sensitive": {"r_vocal": 0.892775, "r_inst": 0.449745},
-    "lossless": {"r_vocal": 0.933074, "r_inst": 0.358927}
+    "reference_center": {"r_vocal": 0.933074, "r_inst": 0.358927}
   },
   "scenes": {
     "tempo_drift_0p4": {"r_vocal": 0.999357, "r_inst": -0.001678},
@@ -18,4 +18,3 @@
     "stereo_mimo": {"r_vocal_min": 0.999619, "r_ref_max": 0.003764}
   }
 }
-

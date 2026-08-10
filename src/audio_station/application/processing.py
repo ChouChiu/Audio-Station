@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import logging
+import math
+from dataclasses import replace
 from pathlib import Path
+
+import numpy as np
 
 from audio_station.application.i18n import tr
 from audio_station.application.models import (
+    AudioStats,
     CancellationToken,
     NeuralJob,
     ProcessingResult,
@@ -12,12 +17,46 @@ from audio_station.application.models import (
     ProgressEvent,
     ReferenceJob,
 )
-from audio_station.audio import create_pcm_audio, read_audio, resample_audio, write_wav_atomic
+from audio_station.audio import (
+    AudioData,
+    create_pcm_audio,
+    read_audio,
+    resample_audio,
+    write_wav_atomic,
+)
 from audio_station.dsp import align_audio, process_audio
 from audio_station.neural import MdxNet, get_model
 from audio_station.neural.model_store import ensure_model
 
 logger = logging.getLogger(__name__)
+
+
+def _dbfs(amplitude: float) -> float:
+    return 20.0 * math.log10(amplitude) if amplitude > 0 else -math.inf
+
+
+def _audio_stats(audio: AudioData, bit_depth: int, token: CancellationToken) -> AudioStats:
+    peak = 0.0
+    square_sum = 0.0
+    sample_count = 0
+    block_size = 262_144
+    for start in range(0, audio.frames, block_size):
+        token.raise_if_cancelled()
+        end = min(start + block_size, audio.frames)
+        values = np.asarray(audio.samples[:, start:end], dtype=np.float64)
+        peak = max(peak, float(np.max(np.abs(values), initial=0.0)))
+        square_sum += float(np.sum(values * values))
+        sample_count += values.size
+    rms = math.sqrt(square_sum / max(sample_count, 1))
+    return AudioStats(
+        duration_seconds=audio.frames / audio.sample_rate,
+        sample_rate=audio.sample_rate,
+        channels=audio.channels,
+        bit_depth=bit_depth,
+        peak_dbfs=_dbfs(peak),
+        rms_dbfs=_dbfs(rms),
+        file_size=0,
+    )
 
 
 def _emit(
@@ -32,6 +71,16 @@ def _validate_distinct(*paths: Path) -> None:
         raise ValueError("output path must not overwrite an input file")
 
 
+def _validate_reference_paths(song: Path, accompaniment: Path, output: Path) -> None:
+    resolved_song = song.expanduser().resolve()
+    resolved_accompaniment = accompaniment.expanduser().resolve()
+    resolved_output = output.expanduser().resolve()
+    if resolved_song == resolved_accompaniment:
+        raise ValueError("song and accompaniment must be different files")
+    if resolved_output in {resolved_song, resolved_accompaniment}:
+        raise ValueError("output path must not overwrite an input file")
+
+
 def run_reference_job(
     job: ReferenceJob,
     token: CancellationToken,
@@ -43,7 +92,7 @@ def run_reference_job(
         job.accompaniment,
         job.algorithm.value,
     )
-    _validate_distinct(job.song, job.accompaniment, job.output)
+    _validate_reference_paths(job.song, job.accompaniment, job.output)
     song = reference = processed_audio = None
     try:
         _emit(progress, 0, job.language, "loading_song")
@@ -93,16 +142,15 @@ def run_reference_job(
             token,
             processed_audio.samples,
         )
+        bit_depth = 24 if job.algorithm.value == "reference_center" else 16
+        _emit(progress, 86, job.language, "analyzing_output")
+        stats = _audio_stats(processed_audio, bit_depth, token)
         _emit(progress, 90, job.language, "saving")
-        write_wav_atomic(
-            job.output,
-            processed_audio,
-            24 if job.algorithm.value == "lossless" else 16,
-            token,
-        )
+        write_wav_atomic(job.output, processed_audio, bit_depth, token)
+        stats = replace(stats, file_size=job.output.stat().st_size)
         _emit(progress, 100, job.language, "done_status", path=job.output)
         logger.info("reference job completed: %s", job.output.resolve())
-        return ProcessingResult((job.output.resolve(),))
+        return ProcessingResult((job.output.resolve(),), (stats,))
     finally:
         for audio in (processed_audio, reference, song):
             if audio is not None:
