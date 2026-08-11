@@ -10,18 +10,16 @@ from pathlib import Path
 
 from PySide6.QtCore import QCoreApplication
 
-from application.logging import configure_logging, set_log_level
-from application.models import (
-    Algorithm,
-    CancellationToken,
+from app.version import __version__
+from features.neural_separation import (
+    DEFAULT_MODEL_ID,
     NeuralJob,
-    ProcessingCancelled,
-    ProgressEvent,
-    ReferenceJob,
+    model_catalog,
+    run_neural_job,
 )
-from application.processing import run_neural_job, run_reference_job
-from application.version import __version__
-from neural import DEFAULT_MODEL_ID, model_catalog
+from features.reference_removal import Algorithm, ReferenceJob, run_reference_job
+from shared.logging import configure_logging, set_log_level
+from shared.processing import CancellationToken, ProcessingCancelled, ProgressEvent
 
 
 def _algorithm_key(value: str) -> str:
@@ -67,9 +65,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _print_progress(event: ProgressEvent) -> None:
-    logging.getLogger("application.processing").info(
-        "progress: %3d%%  %s", event.value, event.message
-    )
+    logging.getLogger(__name__).info("progress: %3d%%  %s", event.value, event.message)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -87,7 +83,7 @@ def main(argv: list[str] | None = None) -> int:
     app.setApplicationName("Audio Station")
     app.setOrganizationName("Audio Station")
     with redirect_stdout(io.StringIO()):
-        from presentation.config import cfg, load_config
+        from shared.config import cfg, load_config
 
     load_config()
     set_log_level(str(cfg.log_level.value))

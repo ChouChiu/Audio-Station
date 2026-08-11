@@ -69,23 +69,24 @@ AI 模型输出 `<歌曲名>_vocal.wav` 与 `<歌曲名>_background.wav`。模�
 
 ```text
 src/
-├── application/       公共任务、处理编排、取消、进度、翻译与伴奏匹配
-├── audio/             流式解码、临时 PCM/memmap、重采样和原子 WAV 写出
-├── dsp/
-│   ├── transforms/    STFT、iSTFT 和频谱工具
-│   ├── alignment/     全局与局部时间对齐
-│   └── algorithms/    参考伴奏对消算法
-├── neural/            模型目录、下载缓存和 MDX-Net ONNX 推理
-├── presentation/
-│   ├── pages/         主页、MR、AI 与设置页
-│   └── widgets/       Fluent 复合控件
+├── app/               应用壳、主窗口和后台任务适配器
+├── features/
+│   ├── reference_removal/  伴奏匹配、任务模型、处理管线、DSP 与页面
+│   ├── neural_separation/  模型目录、下载、MDX-Net 管线与页面
+│   ├── home/               首页功能
+│   └── settings/           设置功能
+├── shared/
+│   ├── audio/         流式解码、临时 PCM/memmap、重采样和原子 WAV 写出
+│   ├── dsp/           两种分离功能共用的 STFT、iSTFT 和频谱工具
+│   ├── ui/            Fluent 复合控件
+│   └── config.py      跨功能持久化配置
 ├── resources/         三语翻译和模型元数据
 └── entrypoints/       GUI 与 CLI 入口
-tests/                 unit、integration、gui、benchmarks
+tests/                 按 app、features、shared、entrypoints 镜像源码结构
 deployment/            standalone 专用入口
 ```
 
-模块依赖保持单向：底层音频/DSP/神经网络不依赖界面；GUI 与 CLI 仅通过 `application` 的任务类型和处理服务调用它们。
+模块依赖保持单向：`shared` 不依赖任何功能，功能包聚合自身的模型、处理、算法和页面，`app` 只负责跨功能编排，`entrypoints` 负责启动应用。新增功能通常只需增加一个 `features/<feature>/` 目录。
 
 ## 测试与检查
 
