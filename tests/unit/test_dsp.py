@@ -1,10 +1,10 @@
 import numpy as np
 import pytest
 
-from audio_station.application.models import Algorithm, CancellationToken, ProcessingCancelled
-from audio_station.audio import create_pcm_audio
-from audio_station.dsp import align_audio, process_audio
-from audio_station.dsp.algorithms import process_channel
+from application.models import Algorithm, CancellationToken, ProcessingCancelled
+from audio import create_pcm_audio
+from dsp import align_audio, process_audio
+from dsp.algorithms import process_channel
 
 
 def corr(first, second):

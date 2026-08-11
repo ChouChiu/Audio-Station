@@ -5,9 +5,9 @@ import resource
 import numpy as np
 import pytest
 
-from audio_station.application.models import Algorithm, CancellationToken
-from audio_station.audio import create_pcm_audio
-from audio_station.dsp import process_audio
+from application.models import Algorithm, CancellationToken
+from audio import create_pcm_audio
+from dsp import process_audio
 
 
 @pytest.mark.slow

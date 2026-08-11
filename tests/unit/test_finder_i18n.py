@@ -1,9 +1,9 @@
 import json
 from pathlib import Path
 
-from audio_station.application.finder import filename_similarity, find_best_match
-from audio_station.application.i18n import SUPPORTED_LANGUAGES, tr
-from audio_station.resources import resource_path
+from application.finder import filename_similarity, find_best_match
+from application.i18n import SUPPORTED_LANGUAGES, tr
+from resources import resource_path
 
 
 def test_accompaniment_finder(tmp_path: Path):

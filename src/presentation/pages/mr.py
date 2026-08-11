@@ -19,10 +19,10 @@ from qfluentwidgets import (
     TitleLabel,
 )
 
-from audio_station.application.i18n import tr
-from audio_station.application.models import Algorithm, AudioStats
-from audio_station.presentation.config import cfg
-from audio_station.presentation.widgets import FormCard, PageScrollArea, SmoothComboBox
+from application.i18n import tr
+from application.models import Algorithm, AudioStats
+from presentation.config import cfg
+from presentation.widgets import FormCard, PageScrollArea, SmoothComboBox
 
 
 class MrPage(PageScrollArea):

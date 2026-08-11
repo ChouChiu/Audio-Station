@@ -7,8 +7,8 @@ from pathlib import Path
 
 from PySide6.QtCore import QStandardPaths
 
-from audio_station.application.models import CancellationToken, ProgressCallback, ProgressEvent
-from audio_station.neural.catalog import ModelEntry
+from application.models import CancellationToken, ProgressCallback, ProgressEvent
+from neural.catalog import ModelEntry
 
 
 def default_models_dir() -> Path:

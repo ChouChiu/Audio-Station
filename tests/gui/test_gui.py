@@ -8,11 +8,11 @@ from PySide6.QtCore import QPoint
 from qfluentwidgets import MenuAnimationType
 from qfluentwidgets.components.widgets.menu import DummyMenuAnimationManager
 
-from audio_station.application.models import AudioStats
-from audio_station.presentation.config import cfg, load_config
-from audio_station.presentation.main_window import MainWindow
-from audio_station.presentation.pages import MrPage
-from audio_station.presentation.widgets import SmoothComboBox, SmoothComboBoxMenu
+from application.models import AudioStats
+from presentation.config import cfg, load_config
+from presentation.main_window import MainWindow
+from presentation.pages import MrPage
+from presentation.widgets import SmoothComboBox, SmoothComboBoxMenu
 
 
 def test_main_window_has_four_unique_pages(qtbot):

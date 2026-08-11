@@ -42,7 +42,7 @@ pip install "PySide6-Fluent-Widgets[full]" -i https://pypi.org/simple/
 ```bash
 audio-station
 # 或
-python -m audio_station
+python -m entrypoints
 ```
 
 ## 命令行
@@ -68,7 +68,7 @@ AI 模型输出 `<歌曲名>_vocal.wav` 与 `<歌曲名>_background.wav`。模�
 ## 项目结构
 
 ```text
-src/audio_station/
+src/
 ├── application/       公共任务、处理编排、取消、进度、翻译与伴奏匹配
 ├── audio/             流式解码、临时 PCM/memmap、重采样和原子 WAV 写出
 ├── dsp/
@@ -90,8 +90,8 @@ deployment/            standalone 专用入口
 ## 测试与检查
 
 ```bash
-.venv/bin/ruff check src/audio_station tests
-.venv/bin/ruff format --check src/audio_station tests
+.venv/bin/ruff check src tests
+.venv/bin/ruff format --check src tests
 QT_QPA_PLATFORM=offscreen .venv/bin/pytest
 QT_QPA_PLATFORM=offscreen .venv/bin/pytest tests/benchmarks --runslow
 QT_QPA_PLATFORM=offscreen .venv/bin/audio-station --selftest

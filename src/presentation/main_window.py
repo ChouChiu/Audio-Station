@@ -16,15 +16,15 @@ from qfluentwidgets import (
     setTheme,
 )
 
-from audio_station.application.finder import find_best_match
-from audio_station.application.i18n import tr
-from audio_station.application.logging import set_log_level
-from audio_station.application.models import Algorithm, NeuralJob, ReferenceJob
-from audio_station.application.processing import run_neural_job, run_reference_job
-from audio_station.neural import get_model
-from audio_station.presentation.config import cfg
-from audio_station.presentation.pages import AiPage, HomePage, MrPage, SettingsPage
-from audio_station.presentation.worker import ProcessingWorker
+from application.finder import find_best_match
+from application.i18n import tr
+from application.logging import set_log_level
+from application.models import Algorithm, NeuralJob, ReferenceJob
+from application.processing import run_neural_job, run_reference_job
+from neural import get_model
+from presentation.config import cfg
+from presentation.pages import AiPage, HomePage, MrPage, SettingsPage
+from presentation.worker import ProcessingWorker
 
 
 class MainWindow(FluentWindow):

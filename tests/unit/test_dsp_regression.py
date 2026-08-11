@@ -1,8 +1,8 @@
 import numpy as np
 import pytest
 
-from audio_station.application.models import Algorithm
-from audio_station.dsp import align_audio, process_audio
+from application.models import Algorithm
+from dsp import align_audio, process_audio
 
 
 def correlation(first, second):

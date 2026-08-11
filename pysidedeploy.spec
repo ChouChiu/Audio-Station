@@ -25,7 +25,7 @@ plugins =
 [nuitka]
 macos.permissions = 
 mode = standalone
-extra_args = --quiet --noinclude-qt-translations --include-package=audio_station --include-package-data=audio_station --include-package=qfluentwidgets --include-package=scipy._external.array_api_compat.numpy --include-module=onnxruntime.capi._pybind_state
+extra_args = --quiet --noinclude-qt-translations --include-package=application --include-package=audio --include-package=dsp --include-package=entrypoints --include-package=neural --include-package=presentation --include-package=resources --include-package-data=resources --include-package=qfluentwidgets --include-package=scipy._external.array_api_compat.numpy --include-module=onnxruntime.capi._pybind_state
 
 [buildozer]
 mode = debug

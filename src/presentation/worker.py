@@ -5,7 +5,7 @@ from collections.abc import Callable
 
 from PySide6.QtCore import QObject, Signal, Slot
 
-from audio_station.application.models import CancellationToken, ProcessingCancelled, ProgressEvent
+from application.models import CancellationToken, ProcessingCancelled, ProgressEvent
 
 
 class ProcessingWorker(QObject):

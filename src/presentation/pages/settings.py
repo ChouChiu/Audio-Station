@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from qfluentwidgets import FluentIcon, OptionsSettingCard, SwitchSettingCard, TitleLabel
 
-from audio_station.application.i18n import tr
-from audio_station.presentation.config import cfg
-from audio_station.presentation.widgets import PageScrollArea
+from application.i18n import tr
+from presentation.config import cfg
+from presentation.widgets import PageScrollArea
 
 
 class SettingsPage(PageScrollArea):

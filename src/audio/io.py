@@ -11,7 +11,7 @@ import numpy as np
 import soundfile as sf
 import soxr
 
-from audio_station.application.models import CancellationToken
+from application.models import CancellationToken
 
 logger = logging.getLogger(__name__)
 

@@ -5,8 +5,8 @@ import mmap
 import numpy as np
 from scipy.ndimage import gaussian_filter
 
-from audio_station.application.models import Algorithm, CancellationToken
-from audio_station.dsp.transforms import fft_frequencies, istft, stft
+from application.models import Algorithm, CancellationToken
+from dsp.transforms import fft_frequencies, istft, stft
 
 
 def _release_mapped_pages(values: np.ndarray) -> None:

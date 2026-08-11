@@ -13,11 +13,11 @@ from qfluentwidgets import (
     TitleLabel,
 )
 
-from audio_station.application.i18n import tr
-from audio_station.neural import DEFAULT_MODEL_ID, model_catalog
-from audio_station.neural.model_store import find_model
-from audio_station.presentation.config import cfg
-from audio_station.presentation.widgets import FormCard, PageScrollArea, SmoothComboBox
+from application.i18n import tr
+from neural import DEFAULT_MODEL_ID, model_catalog
+from neural.model_store import find_model
+from presentation.config import cfg
+from presentation.widgets import FormCard, PageScrollArea, SmoothComboBox
 
 
 class AiPage(PageScrollArea):

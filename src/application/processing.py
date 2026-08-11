@@ -7,8 +7,8 @@ from pathlib import Path
 
 import numpy as np
 
-from audio_station.application.i18n import tr
-from audio_station.application.models import (
+from application.i18n import tr
+from application.models import (
     AudioStats,
     CancellationToken,
     NeuralJob,
@@ -17,16 +17,16 @@ from audio_station.application.models import (
     ProgressEvent,
     ReferenceJob,
 )
-from audio_station.audio import (
+from audio import (
     AudioData,
     create_pcm_audio,
     read_audio,
     resample_audio,
     write_wav_atomic,
 )
-from audio_station.dsp import align_audio, process_audio
-from audio_station.neural import MdxNet, get_model
-from audio_station.neural.model_store import ensure_model
+from dsp import align_audio, process_audio
+from neural import MdxNet, get_model
+from neural.model_store import ensure_model
 
 logger = logging.getLogger(__name__)
 

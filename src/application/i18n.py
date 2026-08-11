@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from functools import lru_cache
 
-from audio_station.resources import resource_path
+from resources import resource_path
 
 SUPPORTED_LANGUAGES = ("zh_cn", "ja_jp", "ko_kr")
 

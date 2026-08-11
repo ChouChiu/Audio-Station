@@ -10,9 +10,8 @@ from pathlib import Path
 
 from PySide6.QtCore import QCoreApplication
 
-from audio_station import __version__
-from audio_station.application.logging import configure_logging, set_log_level
-from audio_station.application.models import (
+from application.logging import configure_logging, set_log_level
+from application.models import (
     Algorithm,
     CancellationToken,
     NeuralJob,
@@ -20,8 +19,9 @@ from audio_station.application.models import (
     ProgressEvent,
     ReferenceJob,
 )
-from audio_station.application.processing import run_neural_job, run_reference_job
-from audio_station.neural import DEFAULT_MODEL_ID, model_catalog
+from application.processing import run_neural_job, run_reference_job
+from application.version import __version__
+from neural import DEFAULT_MODEL_ID, model_catalog
 
 
 def _algorithm_key(value: str) -> str:
@@ -67,7 +67,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _print_progress(event: ProgressEvent) -> None:
-    logging.getLogger("audio_station.processing").info(
+    logging.getLogger("application.processing").info(
         "progress: %3d%%  %s", event.value, event.message
     )
 
@@ -80,14 +80,14 @@ def main(argv: list[str] | None = None) -> int:
         # import time.  Keep normal application startup output clean without
         # changing or patching the installed dependency.
         with redirect_stdout(io.StringIO()):
-            from audio_station.entrypoints.gui import run_gui
+            from entrypoints.gui import run_gui
 
         return run_gui(args.selftest)
     app = QCoreApplication.instance() or QCoreApplication(sys.argv[:1])
     app.setApplicationName("Audio Station")
     app.setOrganizationName("Audio Station")
     with redirect_stdout(io.StringIO()):
-        from audio_station.presentation.config import cfg, load_config
+        from presentation.config import cfg, load_config
 
     load_config()
     set_log_level(str(cfg.log_level.value))

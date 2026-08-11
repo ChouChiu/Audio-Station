@@ -4,8 +4,8 @@ from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QHBoxLayout
 from qfluentwidgets import BodyLabel, FluentIcon, PrimaryPushButton, SubtitleLabel, TitleLabel
 
-from audio_station.application.i18n import tr
-from audio_station.presentation.widgets import FormCard, PageScrollArea
+from application.i18n import tr
+from presentation.widgets import FormCard, PageScrollArea
 
 
 class HomePage(PageScrollArea):

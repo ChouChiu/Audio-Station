@@ -8,10 +8,10 @@ from pathlib import Path
 
 import numpy as np
 
-from audio_station.application.models import CancellationToken
-from audio_station.audio import create_pcm_audio
-from audio_station.dsp.transforms import istft, stft
-from audio_station.resources import resource_path
+from application.models import CancellationToken
+from audio import create_pcm_audio
+from dsp.transforms import istft, stft
+from resources import resource_path
 
 
 @dataclass(frozen=True, slots=True)

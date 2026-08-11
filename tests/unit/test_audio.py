@@ -4,15 +4,15 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 
-from audio_station.application.models import CancellationToken
-from audio_station.audio import (
+from application.models import CancellationToken
+from audio import (
     AudioData,
     create_pcm_audio,
     read_audio,
     resample_audio,
     write_wav_atomic,
 )
-from audio_station.audio.io import _read_with_qt
+from audio.io import _read_with_qt
 
 
 def test_wav_roundtrip_and_resample(tmp_path: Path):

@@ -8,8 +8,8 @@ from contextlib import redirect_stdout
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 
-from audio_station import __version__
-from audio_station.application.logging import configure_logging, set_log_level
+from application.logging import configure_logging, set_log_level
+from application.version import __version__
 
 
 def run_gui(selftest: bool = False) -> int:
@@ -21,14 +21,14 @@ def run_gui(selftest: bool = False) -> int:
     # QFluentWidgets prints a Pro advertisement while its package is imported.
     # Keep stdout reserved for CLI result data even in standalone builds.
     with redirect_stdout(io.StringIO()):
-        from audio_station.presentation.config import cfg, load_config
+        from presentation.config import cfg, load_config
 
     load_config()
     set_log_level(str(cfg.log_level.value))
     import logging
 
     logging.getLogger(__name__).info("starting GUI")
-    from audio_station.presentation.main_window import MainWindow
+    from presentation.main_window import MainWindow
 
     window = MainWindow()
     window.show()

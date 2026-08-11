@@ -1,4 +1,4 @@
-from audio_station.entrypoints.cli import build_parser
+from entrypoints.cli import build_parser
 
 
 def test_legacy_reference_algorithm_names_are_migrated():

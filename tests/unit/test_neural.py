@@ -1,9 +1,9 @@
 import numpy as np
 
-from audio_station.application.models import CancellationToken
-from audio_station.audio import create_pcm_audio
-from audio_station.neural.catalog import DEFAULT_MODEL_ID, get_model, model_catalog
-from audio_station.neural.mdxnet import MdxNetSpec, demix_chunks
+from application.models import CancellationToken
+from audio import create_pcm_audio
+from neural.catalog import DEFAULT_MODEL_ID, get_model, model_catalog
+from neural.mdxnet import MdxNetSpec, demix_chunks
 
 
 def test_catalog_is_unique_and_has_hashes():

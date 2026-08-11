@@ -4,7 +4,7 @@ import numpy as np
 from scipy.ndimage import median_filter
 from scipy.signal import correlate, correlation_lags
 
-from audio_station.application.models import CancellationToken
+from application.models import CancellationToken
 
 
 def _mono(channels: np.ndarray) -> np.ndarray:

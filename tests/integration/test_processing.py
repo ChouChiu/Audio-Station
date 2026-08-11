@@ -4,8 +4,8 @@ import numpy as np
 import pytest
 import soundfile as sf
 
-from audio_station.application.models import Algorithm, CancellationToken, ReferenceJob
-from audio_station.application.processing import run_reference_job
+from application.models import Algorithm, CancellationToken, ReferenceJob
+from application.processing import run_reference_job
 
 
 def test_reference_pipeline_end_to_end(tmp_path: Path):

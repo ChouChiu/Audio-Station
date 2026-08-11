@@ -1,6 +1,6 @@
 import numpy as np
 
-from audio_station.dsp.transforms import fft_frequencies, hann, istft, stft
+from dsp.transforms import fft_frequencies, hann, istft, stft
 
 
 def test_stft_round_trip_and_helpers():

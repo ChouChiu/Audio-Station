@@ -3,12 +3,12 @@ import re
 
 import pytest
 
-from audio_station.application.logging import ApplicationLogFormatter, normalise_log_level
+from application.logging import ApplicationLogFormatter, normalise_log_level
 
 
 def test_application_log_formatter_is_single_line_and_parseable():
     record = logging.LogRecord(
-        "audio_station.audio.io",
+        "audio.io",
         logging.WARNING,
         __file__,
         1,
@@ -23,7 +23,7 @@ def test_application_log_formatter_is_single_line_and_parseable():
 
     assert re.fullmatch(
         r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.78 "
-        r"\[WARNING\] audio_station\.audio\.io: "
+        r"\[WARNING\] audio\.io: "
         r"decoder failed: unsupported codec\\nretrying",
         output,
     )
