@@ -1,11 +1,19 @@
 from __future__ import annotations
 
+import logging
 import math
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QUrl, Signal
-from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
-from PySide6.QtWidgets import QFileDialog, QGridLayout, QHBoxLayout, QVBoxLayout, QWidget
+from PySide6.QtMultimedia import QAudioOutput, QMediaDevices, QMediaPlayer
+from PySide6.QtWidgets import (
+    QFileDialog,
+    QGridLayout,
+    QHBoxLayout,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
+)
 from qfluentwidgets import (
     BodyLabel,
     CaptionLabel,
@@ -19,10 +27,12 @@ from qfluentwidgets import (
     TitleLabel,
 )
 
-from features.reference_removal.models import Algorithm, AudioStats
+from features.reference_removal.models import AudioStats
 from shared.config import cfg
 from shared.i18n import tr
 from shared.ui import FormCard, PageScrollArea, SmoothComboBox
+
+logger = logging.getLogger(__name__)
 
 
 class MrPage(PageScrollArea):
@@ -56,7 +66,6 @@ class MrPage(PageScrollArea):
         self.layout.addWidget(self.files)
 
         self.parameters = FormCard()
-        self.algorithm_label, self.algorithm = BodyLabel(), SmoothComboBox()
         self.sigma_label, self.sigma = BodyLabel(), SmoothComboBox()
         self.strength_label, self.strength_value = BodyLabel(), BodyLabel("75%")
         self.strength = Slider(Qt.Orientation.Horizontal)
@@ -64,13 +73,26 @@ class MrPage(PageScrollArea):
         self.strength.setValue(75)
         self.align = SwitchButton()
         self.align.setChecked(bool(cfg.auto_align.value))
-        self.parameters.add_row(self.algorithm_label, self.algorithm)
+        self.center_extraction_label, self.center_extraction = BodyLabel(), SwitchButton()
+        self.center_extraction.setChecked(bool(cfg.center_extraction.value))
+        self.weak_vocal_protection_label, self.weak_vocal_protection = (
+            BodyLabel(),
+            SwitchButton(),
+        )
+        self.weak_vocal_protection.setChecked(
+            bool(cfg.weak_vocal_protection.value) and self.center_extraction.isChecked()
+        )
         self.parameters.add_row(self.sigma_label, self.sigma)
         self.parameters.add_row(self.strength_label, self.strength, self.strength_value, self.align)
+        self.parameters.add_row(self.center_extraction_label, self.center_extraction)
+        self.parameters.add_row(self.weak_vocal_protection_label, self.weak_vocal_protection)
         self.layout.addWidget(self.parameters)
 
         self.status_card = FormCard()
         self.status = BodyLabel()
+        self.status.setWordWrap(True)
+        self.status.setMinimumWidth(0)
+        self.status.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.progress = ProgressBar()
         self.status_card.layout.addWidget(self.status)
         self.status_card.layout.addWidget(self.progress)
@@ -78,6 +100,8 @@ class MrPage(PageScrollArea):
 
         self.preview_card = FormCard()
         self.preview_status = BodyLabel()
+        self.preview_status.setMinimumWidth(0)
+        self.preview_status.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.preview_seek = Slider(Qt.Orientation.Horizontal)
         self.preview_seek.setRange(0, 1)
         self.preview_seek.setEnabled(False)
@@ -128,7 +152,10 @@ class MrPage(PageScrollArea):
         self.data_card.layout.addLayout(self.stats_grid)
         self.layout.addWidget(self.data_card)
 
+        self.media_devices = QMediaDevices(self)
         self.audio_output = QAudioOutput(self)
+        self.media_devices.audioOutputsChanged.connect(self._sync_preview_output_device)
+        self._sync_preview_output_device()
         self.audio_output.setVolume(0.75)
         self.player = QMediaPlayer(self)
         self.player.setAudioOutput(self.audio_output)
@@ -154,6 +181,7 @@ class MrPage(PageScrollArea):
         self.start_button.clicked.connect(self.start_requested)
         self.cancel_button.clicked.connect(self.cancel_requested)
         self.strength.valueChanged.connect(lambda value: self.strength_value.setText(f"{value}%"))
+        self.center_extraction.checkedChanged.connect(self._sync_enhancement_controls)
         self.preview_play.clicked.connect(self._toggle_preview)
         self.preview_stop.clicked.connect(self.stop_preview)
         self.preview_volume.valueChanged.connect(
@@ -179,15 +207,23 @@ class MrPage(PageScrollArea):
         self.acc_label.setText(tr(language, "acc_label"))
         self.output_label.setText(tr(language, "output_file"))
         self.output_edit.setPlaceholderText(tr(language, "output_name_hint"))
-        self.algorithm_label.setText(tr(language, "algorithm"))
         self.sigma_label.setText(tr(language, "reverb_label"))
         self.strength_label.setText(tr(language, "strength"))
+        self.center_extraction_label.setText(tr(language, "center_extraction"))
+        self.weak_vocal_protection_label.setText(tr(language, "weak_vocal_protection"))
         for button in (self.song_button, self.acc_button, self.output_button):
             button.setText(tr(language, "browse"))
         self.auto_find.setOnText(tr(language, "auto_find_on"))
         self.auto_find.setOffText(tr(language, "auto_find_off"))
         self.align.setOnText(tr(language, "auto_align"))
         self.align.setOffText(tr(language, "auto_align"))
+        for switch in (self.center_extraction, self.weak_vocal_protection):
+            switch.setOnText(tr(language, "switch_on"))
+            switch.setOffText(tr(language, "switch_off"))
+        self.center_extraction.setToolTip(tr(language, "center_extraction_tip"))
+        self.center_extraction_label.setToolTip(tr(language, "center_extraction_tip"))
+        self.weak_vocal_protection.setToolTip(tr(language, "weak_vocal_protection_tip"))
+        self.weak_vocal_protection_label.setToolTip(tr(language, "weak_vocal_protection_tip"))
         self.cancel_button.setText(tr(language, "cancel"))
         self.start_button.setText(tr(language, "start"))
         self.preview_stop.setText(tr(language, "preview_stop"))
@@ -200,24 +236,18 @@ class MrPage(PageScrollArea):
             self.preview_status.setText(tr(language, "preview_empty"))
         if self.progress.value() == 0:
             self.status.setText(tr(language, "ready"))
-        previous = self.algorithm.currentData() or cfg.algorithm.value
-        self.algorithm.clear()
-        for key, text_key in (
-            (Algorithm.REFERENCE_CENTER, "algo_reference_center"),
-            (Algorithm.SOFT_MASK, "algo_soft_mask"),
-            (Algorithm.SPECTRAL_SUBTRACTION, "algo_spectral"),
-            (Algorithm.WIENER_FILTER, "algo_wiener"),
-            (Algorithm.FREQUENCY_WEIGHTED, "algo_freq_weight"),
-            (Algorithm.BINARY_MASK, "algo_binary"),
-            (Algorithm.PHASE_SENSITIVE, "algo_phase"),
-        ):
-            self.algorithm.addItem(tr(language, text_key), userData=key.value)
-        self.algorithm.setCurrentIndex(max(0, self.algorithm.findData(previous)))
         previous_sigma = self.sigma.currentData() or cfg.sigma.value
         self.sigma.clear()
         for value, key in ((1, "sigma_0"), (3, "sigma_1"), (8, "sigma_2"), (16, "sigma_3")):
             self.sigma.addItem(tr(language, key), userData=value)
         self.sigma.setCurrentIndex(max(0, self.sigma.findData(previous_sigma)))
+        self._sync_enhancement_controls()
+
+    def _sync_enhancement_controls(self, _checked: bool | None = None) -> None:
+        center_enabled = self.center_extraction.isChecked()
+        if not center_enabled:
+            self.weak_vocal_protection.setChecked(False)
+        self.weak_vocal_protection.setEnabled(center_enabled)
 
     def set_running(self, running: bool) -> None:
         self.start_button.setEnabled(not running)
@@ -227,13 +257,16 @@ class MrPage(PageScrollArea):
             self.acc_button,
             self.output_button,
             self.output_edit,
-            self.algorithm,
             self.sigma,
             self.strength,
             self.align,
             self.auto_find,
+            self.center_extraction,
+            self.weak_vocal_protection,
         ):
             control.setEnabled(not running)
+        if not running:
+            self._sync_enhancement_controls()
 
     def _select_song(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -276,8 +309,14 @@ class MrPage(PageScrollArea):
     def normalized_output_path(self) -> Path | None:
         text = self.output_edit.text().strip()
         if not text:
-            return None
-        path = Path(text).expanduser()
+            song = self.song_edit.text().strip()
+            if not song:
+                return None
+            source = Path(song).expanduser().resolve()
+            path = source.with_name(source.stem + "_vocals.wav")
+            self._output_user_edited = False
+        else:
+            path = Path(text).expanduser()
         if path.suffix.lower() != ".wav":
             path = path.with_suffix(".wav")
         if not path.is_absolute():
@@ -310,6 +349,7 @@ class MrPage(PageScrollArea):
         self.preview_play.setEnabled(True)
         self.preview_stop.setEnabled(True)
         self.preview_status.setText(result.name)
+        self.preview_status.setToolTip(str(result))
         self.preview_time.setText(f"00:00 / {self._clock(duration)}")
         self._render_stats()
 
@@ -324,6 +364,7 @@ class MrPage(PageScrollArea):
         self.preview_play.setEnabled(False)
         self.preview_stop.setEnabled(False)
         self.preview_status.setText(tr(self.language, "preview_empty"))
+        self.preview_status.setToolTip("")
         self.preview_time.setText("00:00 / 00:00")
         self._render_stats()
 
@@ -333,9 +374,17 @@ class MrPage(PageScrollArea):
         if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
             self.player.pause()
         else:
+            self._sync_preview_output_device()
             if self.player.duration() and self.player.position() >= self.player.duration():
                 self.player.setPosition(0)
             self.player.play()
+
+    def _sync_preview_output_device(self) -> None:
+        selected = QMediaDevices.defaultAudioOutput()
+        if selected.isNull() or self.audio_output.device().id() == selected.id():
+            return
+        self.audio_output.setDevice(selected)
+        logger.info("preview output device changed: %s", selected.description())
 
     def stop_preview(self) -> None:
         self.player.stop()

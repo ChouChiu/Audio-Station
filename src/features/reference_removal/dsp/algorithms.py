@@ -24,6 +24,47 @@ def _release_mapped_pages(values: np.ndarray) -> None:
             mapping.madvise(mmap.MADV_DONTNEED)
 
 
+def _fit_direct_matrix(song: np.ndarray, reference: np.ndarray) -> np.ndarray:
+    """Fit a robust real-valued stereo transfer without modifying the residual."""
+    epsilon = 1e-12
+    x = np.asarray(reference, dtype=np.float64)
+    y = np.asarray(song, dtype=np.float64)
+    x = x - np.mean(x, axis=1, keepdims=True)
+    y = y - np.mean(y, axis=1, keepdims=True)
+    reference_covariance = x @ x.T / max(x.shape[1], 1)
+    trace = float(np.trace(reference_covariance))
+    if not np.isfinite(trace) or trace < epsilon:
+        return np.zeros((y.shape[0], x.shape[0]), dtype=np.float64)
+
+    def solve(weights: np.ndarray | None = None) -> np.ndarray:
+        if weights is None:
+            weighted_x = x
+            weighted_y = y
+            weight_sum = x.shape[1]
+        else:
+            root = np.sqrt(weights)[None, :]
+            weighted_x = x * root
+            weighted_y = y * root
+            weight_sum = float(np.sum(weights))
+        covariance = weighted_x @ weighted_x.T / max(weight_sum, 1.0)
+        cross = weighted_y @ weighted_x.T / max(weight_sum, 1.0)
+        regularizer = 2e-4 * float(np.trace(covariance)) / max(x.shape[0], 1) + epsilon
+        loaded = covariance + regularizer * np.eye(x.shape[0])
+        return np.linalg.solve(loaded.T, cross.T).T
+
+    matrix = solve()
+    residual = y - matrix @ x
+    residual_energy = np.sum(residual * residual, axis=0)
+    scale = float(np.median(residual_energy)) + epsilon
+    # Down-weight vocal, cheer and transient peaks while estimating the reference
+    # path.  The final subtraction still operates directly on the untouched mix.
+    weights = np.minimum(1.0, 4.0 * scale / (residual_energy + epsilon))
+    matrix = solve(weights)
+    row_gain = np.sum(np.abs(matrix), axis=1)
+    matrix *= np.minimum(1.0, 2.0 / (row_gain + epsilon))[:, None]
+    return matrix
+
+
 def _smooth(values: np.ndarray, sigma_time: float, sigma_frequency: float = 1.0) -> np.ndarray:
     return gaussian_filter(values, sigma=(max(sigma_time, 0.0), sigma_frequency), mode="reflect")
 
@@ -32,151 +73,75 @@ def _smooth_complex(values: np.ndarray, sigma_time: float) -> np.ndarray:
     return _smooth(values.real, sigma_time) + 1j * _smooth(values.imag, sigma_time)
 
 
-def _time_sigma(sigma: float, sample_rate: int, hop: int) -> float:
-    """Keep smoothing duration stable when the input sample rate changes."""
-    return max(float(sigma) * sample_rate / (44_100.0 * hop / 512.0), 0.0)
-
-
 def _smoothstep(low: float, high: float, values: np.ndarray) -> np.ndarray:
-    x = np.clip((values - low) / (high - low), 0.0, 1.0)
-    return x * x * (3.0 - 2.0 * x)
+    scaled = np.clip((values - low) / (high - low), 0.0, 1.0)
+    return scaled * scaled * (3.0 - 2.0 * scaled)
 
 
-def _phantom_center_focus(
-    spectra: list[np.ndarray], sample_rate: int, sigma_time: float
-) -> list[np.ndarray]:
-    """Keep the coherent phantom center without treating Mid as the center.
-
-    A hard-panned source contributes to Mid in a conventional M/S split.  Here it
-    receives a low score because the opposite channel has neither matching power
-    nor stable phase.  The statistics are deliberately smoothed before making a
-    mask; this trades a little spatial precision for fewer musical-noise artifacts.
-    """
-    if len(spectra) < 2:
-        return spectra
-    left, right = spectra[:2]
+def _phantom_center_enhance(
+    audio: np.ndarray,
+    sample_rate: int,
+    amount: float,
+    weak_vocal_protection: bool,
+    token: CancellationToken,
+) -> np.ndarray:
+    """Apply the confirmed Audition/PhantomCenter-style vocal enhancement."""
+    mix = float(np.clip(amount, 0.0, 1.0))
+    if audio.shape[0] < 2 or mix <= 0.0:
+        return audio
+    spectra = [stft(audio[channel]) for channel in range(2)]
+    token.raise_if_cancelled()
+    left, right = spectra
     epsilon = 1e-10
-    # Phantom Center's Smooth control is most useful as an artifact guard.  Keep
-    # at least about 70 ms of context even when reference cancellation is set fast.
-    smooth = max(float(sigma_time), 6.0 * sample_rate / 44_100.0)
+    # Roughly 90 ms of temporal context at every sample rate suppresses musical
+    # noise while retaining syllable attacks.
+    smooth = max(0.09 * sample_rate / 512.0, 1.0)
     left_power = _smooth(np.abs(left) ** 2, smooth)
     right_power = _smooth(np.abs(right) ** 2, smooth)
     cross = _smooth_complex(left * np.conj(right), smooth)
-
-    coherence = np.clip(np.abs(cross) ** 2 / (left_power * right_power + epsilon), 0.0, 1.0)
+    coherence = np.clip(
+        np.abs(cross) ** 2 / (left_power * right_power + epsilon),
+        0.0,
+        1.0,
+    )
     phase_delta = np.angle(cross)
     half_delta = 0.5 * np.abs(phase_delta)
     phase_overlap = np.maximum(0.0, np.cos(half_delta) - np.sin(half_delta))
     coherence_gate = _smoothstep(0.03, 0.35, coherence)
-
-    # The common amplitude follows Phantom Center's observable LCR behaviour:
-    # equal in-phase channels pass unchanged, a same-phase panned source contributes
-    # the quieter channel, and phase offsets taper to zero at 90 degrees.
     left_amplitude = np.sqrt(left_power)
     right_amplitude = np.sqrt(right_power)
     common_amplitude = np.minimum(left_amplitude, right_amplitude) * phase_overlap * coherence_gate
-    left_to_center = common_amplitude / (left_amplitude + epsilon) * np.exp(-0.5j * phase_delta)
-    right_to_center = common_amplitude / (right_amplitude + epsilon) * np.exp(0.5j * phase_delta)
-    center = 0.5 * (left_to_center * left + right_to_center * right)
-
+    mean_power = 0.5 * (left_power + right_power)
+    center_share = np.clip(common_amplitude**2 / (mean_power + epsilon), 0.0, 1.0)
+    # A quiet live mic can be buried below wide backing and crowd energy. Applying
+    # the fixed side floor in those bins reduced the already weak singer by up to
+    # 9 dB. Use conventional Mid as a fallback center instead of fading the whole
+    # spatial stage out: this keeps a buried center vocal while still suppressing
+    # wide backing in sections where nobody is singing.
+    center_presence = _smoothstep(0.02, 0.18, center_share)
+    center = 0.5 * (
+        common_amplitude / (left_amplitude + epsilon) * np.exp(-0.5j * phase_delta) * left
+        + common_amplitude / (right_amplitude + epsilon) * np.exp(0.5j * phase_delta) * right
+    )
     frequencies = fft_frequencies(sample_rate, 2 * (left.shape[1] - 1))
-    high_pass = _smoothstep(80.0, 160.0, frequencies)
-    low_pass = 1.0 - _smoothstep(9_000.0, 14_000.0, frequencies)
-    vocal_band = high_pass * low_pass
-
-    # Live lead vocals are not a mathematically perfect center after venue reverb,
-    # camera processing and reference cancellation.  Keep a generous dry floor and
-    # lift only the coherent center so the spatial cleanup does not push the singer
-    # behind the residual crowd.
+    vocal_band = _smoothstep(80.0, 160.0, frequencies) * (
+        1.0 - _smoothstep(9_000.0, 14_000.0, frequencies)
+    )
     side_floor = 0.35
     center_gain = 1.25
-    band = vocal_band[None, :]
-    focused_left = side_floor * left + (center_gain - side_floor) * center
-    focused_right = side_floor * right + (center_gain - side_floor) * center
-    return [left + band * (focused_left - left), right + band * (focused_right - right)]
-
-
-def _content_frequencies(ref_spec: np.ndarray, sample_rate: int, hop: int) -> np.ndarray:
-    bins = ref_spec.shape[1]
-    n_fft = 2 * (bins - 1)
-    expected = 2 * np.pi * np.arange(bins) * hop / n_fft
-    advance = np.angle(ref_spec[1:] * np.conj(ref_spec[:-1]))
-    median = np.median(advance, axis=0)
-    median += 2 * np.pi * np.round((expected - median) / (2 * np.pi))
-    return np.clip(median * sample_rate / (2 * np.pi * hop), 0, sample_rate / 2)
-
-
-def _weighted_median(values: np.ndarray, weights: np.ndarray) -> float:
-    order = np.argsort(values)
-    ordered_values, ordered_weights = values[order], weights[order]
-    index = int(np.searchsorted(np.cumsum(ordered_weights), np.sum(ordered_weights) / 2))
-    return float(ordered_values[min(index, ordered_values.size - 1)])
-
-
-def _estimate_drift(
-    song_spec: np.ndarray,
-    ref_spec: np.ndarray,
-    sample_rate: int,
-    hop: int,
-    frequency_limit: float | None,
-) -> float:
-    if song_spec.shape[0] < 4:
-        return 0.0
-    power = np.sum(np.abs(ref_spec) ** 2, axis=0)
-    frequencies = _content_frequencies(ref_spec, sample_rate, hop)
-    cross = song_spec * np.conj(ref_spec)
-    phase_step = np.median(np.angle(cross[1:] * np.conj(cross[:-1])), axis=0)
-    valid = (power > np.max(power, initial=0) * 1e-6) & (frequencies > 20)
-    if frequency_limit:
-        valid &= frequencies <= frequency_limit
-    if not np.any(valid):
-        return 0.0
-    rates = phase_step[valid] * sample_rate / (2 * np.pi * frequencies[valid] * hop)
-    finite = np.isfinite(rates) & (np.abs(rates) <= 0.03)
-    if not np.any(finite):
-        return 0.0
-    return _weighted_median(rates[finite], power[valid][finite])
-
-
-def _compensate_drift(
-    song_spec: np.ndarray, ref_spec: np.ndarray, sample_rate: int, hop: int
-) -> np.ndarray:
-    frequencies = _content_frequencies(ref_spec, sample_rate, hop)
-    corrected = ref_spec.copy()
-    rate = 0.0
-    time = np.arange(ref_spec.shape[0], dtype=np.float64) * hop / sample_rate
-    for frequency_limit in (1200.0, None):
-        phase = 2 * np.pi * time[:, None] * frequencies[None, :] * rate
-        corrected = ref_spec * np.exp(1j * phase)
-        rate += _estimate_drift(song_spec, corrected, sample_rate, hop, frequency_limit)
-        rate = float(np.clip(rate, -0.03, 0.03))
-    phase = 2 * np.pi * time[:, None] * frequencies[None, :] * rate
-    return ref_spec * np.exp(1j * phase)
-
-
-def _reference_center_channel(
-    song_spec: np.ndarray,
-    ref_spec: np.ndarray,
-    strength: float,
-    sigma: float,
-    sample_rate: int,
-    hop: int,
-):
-    epsilon = 1e-10
-    ref_spec = _compensate_drift(song_spec, ref_spec, sample_rate, hop)
-    smooth = _time_sigma(sigma, sample_rate, hop)
-    cross = _smooth_complex(song_spec * np.conj(ref_spec), smooth)
-    ref_power = _smooth(np.abs(ref_spec) ** 2, smooth)
-    song_power = _smooth(np.abs(song_spec) ** 2, smooth)
-    transfer = cross / (ref_power + epsilon)
-    magnitude = np.abs(transfer)
-    transfer *= np.minimum(1.0, 2.0 / (magnitude + epsilon))
-    coherence = np.clip(np.abs(cross) ** 2 / (song_power * ref_power + epsilon), 0.0, 1.0)
-    gate = _smoothstep(0.12, 0.62, coherence)
-    prediction = transfer * ref_spec
-    # Never subtract more predicted power than the observed mixture can support.
-    prediction *= np.minimum(1.0, np.abs(song_spec) / (np.abs(prediction) + epsilon))
-    return song_spec - strength * gate * prediction
+    fallback_center = 0.5 * (left + right)
+    focused = []
+    for channel in spectra:
+        full_target = side_floor * channel + (center_gain - side_floor) * center
+        if weak_vocal_protection:
+            full_target += (1.0 - side_floor) * (1.0 - center_presence) * fallback_center
+        target = channel + mix * (full_target - channel)
+        focused.append(channel + vocal_band[None, :] * (target - channel))
+    token.raise_if_cancelled()
+    return np.asarray(
+        [istft(channel, length=audio.shape[1]) for channel in focused],
+        dtype=np.float64,
+    )
 
 
 def _reference_center_stereo(
@@ -185,96 +150,74 @@ def _reference_center_stereo(
     sample_rate: int,
     strength: float,
     sigma: float,
+    center_extraction: bool,
+    weak_vocal_protection: bool,
     token: CancellationToken,
 ) -> np.ndarray:
+    """Apply direct reference cancellation and optional center extraction.
+
+    Estimate only a slowly varying 2x2 real gain matrix, then subtract the
+    resulting reference waveform directly. Optional spatial stages are explicit
+    so the base result remains a simple polarity-style reference cancellation.
+    """
     length = min(song.shape[1], reference.shape[1])
-    if song.shape[0] < 2 or reference.shape[0] < 2:
-        return np.stack(
-            [
-                process_channel(
-                    song[c],
-                    reference[min(c, reference.shape[0] - 1)],
-                    sample_rate,
-                    strength,
-                    Algorithm.REFERENCE_CENTER,
-                    sigma,
-                    token=token,
+    mix = np.asarray(song[:, :length], dtype=np.float64)
+    accompaniment = np.asarray(reference[:, :length], dtype=np.float64)
+    if mix.shape[0] < 2 or accompaniment.shape[0] < 2:
+        matrix = _fit_direct_matrix(mix, accompaniment)
+        return mix - strength * (matrix @ accompaniment)
+
+    window = min(max(round(float(sigma) * sample_rate), 4096), length)
+    step = max(window // 3, 1)
+    positions: list[float] = []
+    matrices: list[np.ndarray] = []
+    for center in range(0, length, step):
+        token.raise_if_cancelled()
+        start = max(0, center - window // 2)
+        end = min(length, start + window)
+        start = max(0, end - window)
+        positions.append(float(center))
+        matrices.append(_fit_direct_matrix(mix[:, start:end], accompaniment[:, start:end]))
+    if positions[-1] != length - 1:
+        positions.append(float(length - 1))
+        matrices.append(_fit_direct_matrix(mix[:, -window:], accompaniment[:, -window:]))
+
+    transfer = np.asarray(matrices)
+    if transfer.shape[0] >= 3:
+        smoothed = transfer.copy()
+        for index in range(1, transfer.shape[0] - 1):
+            smoothed[index] = np.median(transfer[index - 1 : index + 2], axis=0)
+        transfer = smoothed
+
+    residual = mix.copy()
+    block_size = 262_144
+    for start in range(0, length, block_size):
+        token.raise_if_cancelled()
+        end = min(start + block_size, length)
+        samples = np.arange(start, end, dtype=np.float64)
+        for output_channel in range(mix.shape[0]):
+            predicted = np.zeros(end - start, dtype=np.float64)
+            for input_channel in range(accompaniment.shape[0]):
+                gain = np.interp(
+                    samples,
+                    positions,
+                    transfer[:, output_channel, input_channel],
                 )
-                for c in range(song.shape[0])
-            ]
-        )
-    y = [stft(song[c, :length]) for c in range(2)]
-    x = [stft(reference[c, :length]) for c in range(2)]
-    combined_song = y[0] + y[1]
-    combined_reference = x[0] + x[1]
-    compensated = _compensate_drift(combined_song, combined_reference, sample_rate, 512)
-    ratio = np.divide(
-        compensated,
-        combined_reference,
-        out=np.ones_like(compensated),
-        where=np.abs(combined_reference) > 1e-12,
+                predicted += gain * accompaniment[input_channel, start:end]
+            residual[output_channel, start:end] -= strength * predicted
+    if not center_extraction:
+        return residual
+    # Preserve the confirmed 75% default sound while making the strength slider
+    # continuous near bypass. Above the default, only reference cancellation
+    # becomes stronger; center enhancement does not keep narrowing the stereo image.
+    center_amount = min(strength / 0.75, 1.0)
+    return _phantom_center_enhance(
+        residual,
+        sample_rate,
+        center_amount,
+        weak_vocal_protection,
+        token,
     )
-    x = [channel * ratio for channel in x]
-    token.raise_if_cancelled()
-    epsilon = 1e-9
-    smooth = _time_sigma(sigma, sample_rate, 512)
-    r11 = _smooth(np.abs(x[0]) ** 2, smooth)
-    r22 = _smooth(np.abs(x[1]) ** 2, smooth)
-    r12 = _smooth_complex(x[0] * np.conj(x[1]), smooth)
-    trace = r11 + r22
-    regularizer = 1e-5 * trace + epsilon
-    a11, a22 = r11 + regularizer, r22 + regularizer
-    determinant = a11 * a22 - np.abs(r12) ** 2
-    determinant = np.maximum(determinant, epsilon)
-    residuals = []
-    for mixture in y:
-        b1 = _smooth_complex(mixture * np.conj(x[0]), smooth)
-        b2 = _smooth_complex(mixture * np.conj(x[1]), smooth)
-        h1 = (b1 * a22 - b2 * np.conj(r12)) / determinant
-        h2 = (b2 * a11 - b1 * r12) / determinant
-        for transfer in (h1, h2):
-            magnitude = np.abs(transfer)
-            transfer *= np.minimum(1.0, 2.0 / (magnitude + epsilon))
-        prediction = h1 * x[0] + h2 * x[1]
-        mixture_power = _smooth(np.abs(mixture) ** 2, smooth)
-        prediction_power = _smooth(np.abs(prediction) ** 2, smooth)
-        reliability = np.clip(prediction_power / (mixture_power + epsilon), 0.0, 1.0)
-        gate = _smoothstep(0.04, 0.35, reliability)
-        prediction *= np.minimum(1.0, np.abs(mixture) / (np.abs(prediction) + epsilon))
-        residuals.append(mixture - strength * gate * prediction)
-    # The spatial stage only needs the two residual spectra.  Releasing MIMO
-    # workspaces here keeps long-file peak RSS below the disk-buffered pipeline's
-    # acceptance limit without changing any samples.
-    del (
-        a11,
-        a22,
-        b1,
-        b2,
-        combined_reference,
-        combined_song,
-        compensated,
-        determinant,
-        gate,
-        h1,
-        h2,
-        magnitude,
-        mixture,
-        mixture_power,
-        prediction,
-        prediction_power,
-        r11,
-        r12,
-        r22,
-        ratio,
-        reliability,
-        regularizer,
-        trace,
-        transfer,
-        x,
-        y,
-    )
-    residuals = _phantom_center_focus(residuals, sample_rate, smooth)
-    return np.asarray([istft(values, length=length) for values in residuals], dtype=np.float64)
 
 
 def process_channel(
@@ -298,6 +241,10 @@ def process_channel(
     strength = float(np.clip(strength, 0.0, 1.0))
     if strength == 0:
         return mix[:length].copy()
+    if algorithm == Algorithm.REFERENCE_CENTER:
+        cancel.raise_if_cancelled()
+        matrix = _fit_direct_matrix(mix[None, :length], accompaniment[None, :length])
+        return mix[:length] - strength * matrix[0, 0] * accompaniment[:length]
     y = stft(mix[:length], n_fft, hop)
     x = stft(accompaniment[:length], n_fft, hop)
     frames = min(y.shape[0], x.shape[0])
@@ -306,9 +253,7 @@ def process_channel(
     y_mag, x_mag = np.abs(y), np.abs(x)
     adjusted = strength * x_mag
     epsilon = 1e-10
-    if algorithm == Algorithm.REFERENCE_CENTER:
-        output_spec = _reference_center_channel(y, x, strength, sigma, sample_rate, hop)
-    elif algorithm == Algorithm.SOFT_MASK:
+    if algorithm == Algorithm.SOFT_MASK:
         mask = y_mag**2 / (y_mag**2 + adjusted**2 + epsilon)
         output_spec = y * mask
     elif algorithm == Algorithm.SPECTRAL_SUBTRACTION:
@@ -345,6 +290,8 @@ def _process_block(
     strength: float,
     algorithm: Algorithm,
     sigma: float,
+    center_extraction: bool,
+    weak_vocal_protection: bool,
     token: CancellationToken,
 ) -> np.ndarray:
     if algorithm == Algorithm.REFERENCE_CENTER and song.shape[0] >= 2 and reference.shape[0] >= 2:
@@ -354,6 +301,8 @@ def _process_block(
             sample_rate,
             strength,
             sigma,
+            center_extraction,
+            weak_vocal_protection,
             token,
         )
     return np.stack(
@@ -381,12 +330,16 @@ def process_audio(
     sigma: float,
     token: CancellationToken | None = None,
     output: np.ndarray | None = None,
+    *,
+    center_extraction: bool = False,
+    weak_vocal_protection: bool = False,
 ) -> np.ndarray:
     cancel = token or CancellationToken()
     mix = np.asarray(song, dtype=np.float32)
     accompaniment = np.asarray(reference, dtype=np.float32)
     if mix.ndim != 2 or accompaniment.ndim != 2 or sample_rate <= 0:
         raise ValueError("audio must have shape [channels, frames] and a positive sample rate")
+    strength = float(np.clip(strength, 0.0, 1.0))
     length = min(mix.shape[1], accompaniment.shape[1])
     mix, accompaniment = mix[:, :length], accompaniment[:, :length]
     if output is None:
@@ -395,7 +348,7 @@ def process_audio(
         if output.shape != (mix.shape[0], length) or output.dtype != np.float32:
             raise ValueError("output must be a float32 [channels, frames] array")
         result = output
-    if strength <= 0:
+    if strength == 0:
         result[:] = mix
         return result
     block = 30 * sample_rate
@@ -412,6 +365,8 @@ def process_audio(
             strength,
             algorithm,
             sigma,
+            center_extraction,
+            weak_vocal_protection,
             cancel,
         )
         fade = min(overlap, end - start) if index > 0 else 0
@@ -437,8 +392,9 @@ def process_audio(
             peak = max(peak, float(np.max(np.abs(view), initial=0.0)))
         else:
             np.clip(view, -1.0, 1.0, out=view)
-    if algorithm == Algorithm.REFERENCE_CENTER and peak > 0.999:
-        scale = 0.999 / peak
+    peak_ceiling = 10 ** (-1.0 / 20.0)
+    if algorithm == Algorithm.REFERENCE_CENTER and peak > peak_ceiling:
+        scale = peak_ceiling / peak
         for start in range(0, length, cleanup_block):
             result[:, start : start + cleanup_block] *= scale
     return result

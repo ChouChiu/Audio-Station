@@ -1,12 +1,13 @@
 # Audio Station
 
-Audio Station 是使用 Python、PySide6 与 PySide6-Fluent-Widgets 重写的桌面人声分离工具，提供两条处理链：使用已知伴奏做参考对消的 **MR Remove**，以及无需伴奏、由 UVR MDX-Net 驱动的 **AI 人声提取**。
+Audio Station 是使用 Python、PySide6 与 PySide6-Fluent-Widgets 重写的桌面人声分离工具，提供三种工作流：使用已知伴奏做单曲参考对消的 **MR Remove**、将多首音源自动排入整场录音并分段对消的 **完整舞台**，以及无需伴奏、由 UVR MDX-Net 驱动的 **AI 人声提取**。
 
 ## 功能
 
-- Fluent Design 四页桌面界面，支持浅色、深色和跟随系统主题
+- Fluent Design 四个主页面；MR 工作区内含“单曲 / 全场”两个子页面，支持浅色、深色和跟随系统主题
 - 中文、日本語、한국어即时切换
 - 自动匹配参考伴奏、GCC-PHAT 全局对齐和局部时钟漂移跟踪
+- 完整舞台多音源时间线：音源无需排序，自动定位完整歌曲和重复片段，Talk、广告与空场原样保留
 - 7 种参考对消算法，包括立体声 2×2 MIMO 参考对消 + 中心聚焦模式
 - UVR MDX-Net ONNX 推理，模型按需下载并校验 SHA-256
 - GUI 和现代子命令 CLI 共用同一处理管线
@@ -51,7 +52,8 @@ python -m entrypoints
 
 ```bash
 audio-station mr <song> <accompaniment> <output.wav> \
-  --algorithm reference_center --strength 75 --sigma 8 --align --lang zh_cn
+  --algorithm reference_center --strength 75 --sigma 8 --align --lang zh_cn \
+  [--center-extraction [--weak-vocal-protection]]
 ```
 
 AI 人声提取：
@@ -61,7 +63,9 @@ audio-station ai <song> \
   [--output-dir <directory>] [--model mdxnet_1] [--models-dir <directory>]
 ```
 
-算法键名为 `reference_center`、`soft_mask`、`spectral_subtraction`、`wiener_filter`、`frequency_weighted`、`binary_mask`、`phase_sensitive`。`reference_center` 会在参考伴奏对消后，以声道间相位、共有幅度、相干性和时间平滑聚焦真正的幻象中心；它不像普通 M/S 那样把硬声像信号也算作中心，并保留部分侧声以保护现场人声、和声和混响。
+GUI 默认只运行 `reference_center` 的简单参考对消：先用音乐起音特征处理现场录音与正式音源波形相关性很低的场景，同时以 GCC-PHAT 和局部漂移跟踪精细校正；随后用 1/3/8/16 秒窗口估计缓慢变化的立体声 2×2 增益矩阵并直接对消参考。需要时可单独开启“中置人声提取”，在约 80 Hz–14 kHz 内聚焦相干幻象中置；其下还可开启“弱人声保护”，用普通 Mid 保护较弱的现场人声而不恢复整层侧声。窗口越短越能跟踪快速音量变化，但也更容易把与参考同唱的内容纳入估计，默认 8 秒偏向稳定保护。旧算法键名 `soft_mask`、`spectral_subtraction`、`wiener_filter`、`frequency_weighted`、`binary_mask`、`phase_sensitive` 仅为 CLI 兼容保留，不再显示在 GUI。
+
+“完整舞台”先为整场录音与每个音源建立多频带起音指纹，每个音源独立寻找最佳完整匹配，再按识别到的舞台时间自动排序；短广告或片头、片尾再次使用同一首歌时，会生成带 `source in/out` 的额外片段实例。自动排布完成后可在时间线中检查舞台位置、音源范围和置信度；每个项目都能单独取消消音，舞台时间与音源截取范围也能双击修改，再执行分段精细对齐与参考对消。参数与单曲 MR Remove 一致，包含对消强度、增益跟踪窗口、自动精细对齐、中置人声提取和弱人声保护。未匹配区间不会补零或裁掉，因此 Talk、观众互动、广告和空场会保持原始长度与内容。
 
 AI 模型输出 `<歌曲名>_vocal.wav` 与 `<歌曲名>_background.wav`。模型搜索顺序为 `--models-dir`、`MR_REMOVER_MODELS`、系统应用数据目录、开发仓库 `models/`。权重缺失时会从 UVR 模型仓库下载到系统应用数据目录；模型不会打入 Python wheel 或 standalone 程序。
 
@@ -69,9 +73,10 @@ AI 模型输出 `<歌曲名>_vocal.wav` 与 `<歌曲名>_background.wav`。模�
 
 ```text
 src/
-├── app/               应用壳、主窗口和后台任务适配器
+├── app/               应用壳、MR 子页面容器、主窗口和后台任务适配器
 ├── features/
 │   ├── reference_removal/  伴奏匹配、任务模型、处理管线、DSP 与页面
+│   ├── full_stage/         多音源指纹匹配、时间线模型与完整舞台页面
 │   ├── neural_separation/  模型目录、下载、MDX-Net 管线与页面
 │   ├── home/               首页功能
 │   └── settings/           设置功能
@@ -99,7 +104,7 @@ QT_QPA_PLATFORM=offscreen .venv/bin/audio-station --selftest
 python -m build
 ```
 
-测试覆盖 STFT/iSTFT、全部参考算法、时间对齐、立体声 MIMO、音频读写、重采样、伴奏匹配、翻译、MDX-Net 分块重叠相加、GUI 导航及端到端参考处理。`--runslow` 会执行 15 分钟、44.1 kHz、双声道 `reference_center` RSS/长度/接缝门禁，目标峰值为 1.5 GiB。合成 DSP 指标只用于回归，不代表真实音乐数据集表现。
+测试覆盖 STFT/iSTFT、全部参考算法、时间对齐、立体声 MIMO、完整舞台自动排布与分段渲染、音频读写、重采样、伴奏匹配、翻译、MDX-Net 分块重叠相加、GUI 导航及端到端参考处理。`--runslow` 会执行 15 分钟、44.1 kHz、双声道 `reference_center` RSS/长度/接缝门禁，目标峰值为 1.5 GiB。合成 DSP 指标只用于回归，不代表真实音乐数据集表现。
 
 ## Linux standalone 发布
 

@@ -1,8 +1,10 @@
 import os
 
 import pytest
+from PySide6.QtCore import QStandardPaths
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+QStandardPaths.setTestModeEnabled(True)
 
 
 def pytest_addoption(parser):

@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from features.reference_removal.dsp import align_audio, process_audio
+from features.reference_removal.dsp import align_audio, process_audio, process_channel
 from features.reference_removal.models import Algorithm
 
 
@@ -46,7 +46,53 @@ def test_reference_center_preserves_centered_non_reference_content():
     assert correlation(output[0], vocal + noise) > 0.96
 
 
-def test_smooth_center_focus_rejects_wide_audience_without_damaging_center_vocal():
+def test_reference_center_does_not_chase_an_unrelated_reference():
+    sample_rate = 22_050
+    length = sample_rate * 5
+    time = np.arange(length) / sample_rate
+    rng = np.random.default_rng(123)
+    vocal = 0.4 * np.sin(2 * np.pi * 440 * time)
+    ambience = rng.normal(0.0, 0.08, length)
+    unrelated_reference = rng.normal(0.0, 0.12, length)
+    mixture = vocal + ambience
+
+    output = process_channel(
+        mixture,
+        unrelated_reference,
+        sample_rate,
+        1.0,
+        Algorithm.REFERENCE_CENTER,
+        8,
+    )
+
+    assert correlation(output, mixture) > 0.999
+    assert np.sqrt(np.mean((output - mixture) ** 2)) < 0.01
+
+
+def test_reference_center_regularizes_a_nearly_mono_reference():
+    sample_rate = 22_050
+    length = sample_rate * 4
+    time = np.arange(length) / sample_rate
+    vocal = 0.35 * np.sin(2 * np.pi * 431 * time)
+    common_reference = 0.2 * np.sin(2 * np.pi * 127 * time)
+    tiny_side = 1e-4 * np.sin(2 * np.pi * 181 * time)
+    reference = np.stack([common_reference + tiny_side, common_reference - tiny_side])
+    mixture = np.stack([vocal + 0.8 * reference[0], 0.97 * vocal + 0.75 * reference[1]])
+
+    output = process_audio(
+        mixture,
+        reference,
+        sample_rate,
+        1.0,
+        Algorithm.REFERENCE_CENTER,
+        8,
+    )
+
+    assert np.isfinite(output).all()
+    assert min(correlation(output[0], vocal), correlation(output[1], vocal)) > 0.98
+
+
+def test_reference_center_suppresses_wide_audience_and_enhances_center_vocal():
     sample_rate = 22_050
     length = sample_rate * 5
     time = np.arange(length) / sample_rate
@@ -63,13 +109,56 @@ def test_smooth_center_focus_rejects_wide_audience_without_damaging_center_vocal
         ]
     )
     reference = np.stack([left_reference, right_reference])
-    focused = process_audio(mixture, reference, sample_rate, 1.0, Algorithm.REFERENCE_CENTER, 8)
-    assert correlation(focused[0], vocal) > 0.98
-    vocal_gain = np.dot(focused[0], vocal) / np.dot(vocal, vocal)
-    assert vocal_gain >= 1.0
-    focused_noise = focused - vocal_gain * vocal
-    original_noise = np.stack([left_audience, right_audience])
-    assert np.sqrt(np.mean(focused_noise**2)) < 0.70 * np.sqrt(np.mean(original_noise**2))
+    output = process_audio(
+        mixture,
+        reference,
+        sample_rate,
+        1.0,
+        Algorithm.REFERENCE_CENTER,
+        8,
+        center_extraction=True,
+    )
+    input_center = np.mean(mixture, axis=0)
+    output_center = np.mean(output, axis=0)
+    input_side = 0.5 * (mixture[0] - mixture[1])
+    output_side = 0.5 * (output[0] - output[1])
+
+    assert correlation(output_center, vocal) > correlation(input_center, vocal)
+    assert correlation(output_center, vocal) > 0.98
+    assert np.sqrt(np.mean(output_side**2)) < 0.6 * np.sqrt(np.mean(input_side**2))
+
+
+def test_reference_center_protects_quiet_vocal_buried_in_wide_backing():
+    sample_rate = 22_050
+    length = sample_rate * 6
+    time = np.arange(length) / sample_rate
+    rng = np.random.default_rng(126)
+    vocal = 0.015 * np.sin(2 * np.pi * 431 * time)
+    left_backing = rng.normal(0.0, 0.14, length)
+    right_backing = rng.normal(0.0, 0.14, length)
+    mixture = np.stack([vocal + left_backing, 0.85 * vocal + right_backing])
+    silent_reference = np.zeros_like(mixture)
+
+    output = process_audio(
+        mixture,
+        silent_reference,
+        sample_rate,
+        0.75,
+        Algorithm.REFERENCE_CENTER,
+        8,
+        center_extraction=True,
+        weak_vocal_protection=True,
+    )
+    output_center = np.mean(output, axis=0)
+    input_center = np.mean(mixture, axis=0)
+    output_side = 0.5 * (output[0] - output[1])
+    input_side = 0.5 * (mixture[0] - mixture[1])
+    input_gain = np.dot(input_center, vocal) / np.dot(vocal, vocal)
+    output_gain = np.dot(output_center, vocal) / np.dot(vocal, vocal)
+
+    assert output_gain >= 0.95 * input_gain
+    assert np.sqrt(np.mean(output_side**2)) < 0.6 * np.sqrt(np.mean(input_side**2))
+    assert np.isfinite(output).all()
 
 
 def test_alignment_and_reference_center_handle_segment_jitter():

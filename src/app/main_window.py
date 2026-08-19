@@ -18,12 +18,15 @@ from qfluentwidgets import (
     setThemeColor,
 )
 
+from app.full_stage_processing import analyze_full_stage_job, run_full_stage_job
+from app.mr_workspace import MrWorkspace
 from app.worker import ProcessingWorker
+from features.full_stage import FullStageJob, FullStageResult
+from features.full_stage.page import FullStagePage
 from features.home import HomePage
 from features.neural_separation import NeuralJob, get_model, run_neural_job
 from features.neural_separation.page import AiPage
 from features.reference_removal import (
-    Algorithm,
     ReferenceJob,
     find_best_match,
     run_reference_job,
@@ -41,11 +44,13 @@ class MainWindow(FluentWindow):
         self.language = str(cfg.language.value)
         self.thread: QThread | None = None
         self.worker: ProcessingWorker | None = None
-        self.active_page: MrPage | AiPage | None = None
+        self.active_page: MrPage | AiPage | FullStagePage | None = None
         self.state_tip: StateToolTip | None = None
         self.close_pending = False
         self.home = HomePage(self)
-        self.mr = MrPage(self)
+        self.mr = MrPage()
+        self.full_stage = FullStagePage()
+        self.mr_workspace = MrWorkspace(self.mr, self.full_stage, self)
         self.ai = AiPage(self)
         self.settings = SettingsPage(self)
         self.resize(1040, 760)
@@ -57,17 +62,20 @@ class MainWindow(FluentWindow):
 
     def _build_navigation(self) -> None:
         self.home_nav = self.addSubInterface(self.home, FluentIcon.HOME, "")
-        self.mr_nav = self.addSubInterface(self.mr, FluentIcon.MUSIC, "")
+        self.mr_nav = self.addSubInterface(self.mr_workspace, FluentIcon.MUSIC, "")
         self.ai_nav = self.addSubInterface(self.ai, FluentIcon.MIX_VOLUMES, "")
         self.settings_nav = self.addSubInterface(
             self.settings, FluentIcon.SETTING, "", NavigationItemPosition.BOTTOM
         )
 
     def _connect(self) -> None:
-        self.home.mr_requested.connect(lambda: self.switchTo(self.mr))
+        self.home.mr_requested.connect(self._open_mr)
         self.home.ai_requested.connect(lambda: self.switchTo(self.ai))
         self.mr.start_requested.connect(self.start_reference)
         self.mr.cancel_requested.connect(self.cancel)
+        self.full_stage.analyze_requested.connect(self.analyze_full_stage)
+        self.full_stage.start_requested.connect(self.start_full_stage)
+        self.full_stage.cancel_requested.connect(self.cancel)
         self.ai.start_requested.connect(self.start_neural)
         self.ai.cancel_requested.connect(self.cancel)
         self.mr.song_changed.connect(self._auto_find)
@@ -78,6 +86,10 @@ class MainWindow(FluentWindow):
     def _language_changed(self, value: object) -> None:
         self.language = str(value)
         self.retranslate()
+
+    def _open_mr(self) -> None:
+        self.mr_workspace.show_single()
+        self.switchTo(self.mr_workspace)
 
     def _apply_theme(self, value: str) -> None:
         theme = {"light": Theme.LIGHT, "dark": Theme.DARK}.get(value, Theme.AUTO)
@@ -102,7 +114,7 @@ class MainWindow(FluentWindow):
 
     def retranslate(self) -> None:
         self.setWindowTitle(tr(self.language, "window_title"))
-        for page in (self.home, self.mr, self.ai, self.settings):
+        for page in (self.home, self.mr_workspace, self.ai, self.settings):
             page.retranslate(self.language)
         for navigation, key in (
             (self.home_nav, "nav_home"),
@@ -155,22 +167,24 @@ class MainWindow(FluentWindow):
             return
         try:
             job = ReferenceJob(
-                song,
-                accompaniment,
-                output,
-                Algorithm(self.mr.algorithm.currentData()),
-                self.mr.strength.value(),
-                int(self.mr.sigma.currentData()),
-                self.mr.align.isChecked(),
-                self.language,
+                song=song,
+                accompaniment=accompaniment,
+                output=output,
+                strength=self.mr.strength.value(),
+                sigma=int(self.mr.sigma.currentData()),
+                auto_align=self.mr.align.isChecked(),
+                language=self.language,
+                center_extraction=self.mr.center_extraction.isChecked(),
+                weak_vocal_protection=self.mr.weak_vocal_protection.isChecked(),
             )
         except (ValueError, TypeError):
             self._warning("warn_invalid_algorithm")
             return
-        cfg.set(cfg.algorithm, job.algorithm.value)
         cfg.set(cfg.sigma, job.sigma)
         cfg.set(cfg.auto_align, job.auto_align)
         cfg.set(cfg.auto_find, self.mr.auto_find.isChecked())
+        cfg.set(cfg.center_extraction, job.center_extraction)
+        cfg.set(cfg.weak_vocal_protection, job.weak_vocal_protection)
         self.mr.clear_result()
         self._start_worker(self.mr, partial(run_reference_job, job))
 
@@ -191,7 +205,64 @@ class MainWindow(FluentWindow):
         job = NeuralJob(song, song.resolve().parent, model_id, language=self.language)
         self._start_worker(self.ai, partial(run_neural_job, job))
 
-    def _start_worker(self, page: MrPage | AiPage, operation) -> None:
+    def _full_stage_job(self) -> FullStageJob | None:
+        if not self.full_stage.stage_edit.text():
+            self._warning("stage_need_audio")
+            return None
+        sources = self.full_stage.source_paths()
+        if not sources:
+            self._warning("stage_need_sources")
+            return None
+        output = self.full_stage.normalized_output_path()
+        if output is None:
+            self._warning("warn_no_out")
+            return None
+        try:
+            job = FullStageJob(
+                stage=Path(self.full_stage.stage_edit.text()).expanduser().resolve(),
+                sources=sources,
+                output=output,
+                strength=self.full_stage.strength.value(),
+                sigma=int(self.full_stage.sigma.currentData()),
+                language=self.language,
+                include_fragments=self.full_stage.include_fragments.isChecked(),
+                auto_align=self.full_stage.align.isChecked(),
+                center_extraction=self.full_stage.center_extraction.isChecked(),
+                weak_vocal_protection=self.full_stage.weak_vocal_protection.isChecked(),
+            )
+        except (TypeError, ValueError):
+            self._warning("warn_output_conflict")
+            return None
+        cfg.set(cfg.sigma, job.sigma)
+        cfg.set(cfg.auto_align, job.auto_align)
+        cfg.set(cfg.center_extraction, job.center_extraction)
+        cfg.set(cfg.weak_vocal_protection, job.weak_vocal_protection)
+        return job
+
+    def analyze_full_stage(self) -> None:
+        if self.worker:
+            return
+        job = self._full_stage_job()
+        if job is None:
+            return
+        self.full_stage.invalidate_analysis()
+        self._start_worker(self.full_stage, partial(analyze_full_stage_job, job))
+
+    def start_full_stage(self) -> None:
+        if self.worker:
+            return
+        job = self._full_stage_job()
+        if job is None:
+            return
+        if self.full_stage.analysis is None:
+            self._warning("stage_need_analysis")
+            return
+        self._start_worker(
+            self.full_stage,
+            partial(run_full_stage_job, job, self.full_stage.analysis),
+        )
+
+    def _start_worker(self, page: MrPage | AiPage | FullStagePage, operation) -> None:
         thread = QThread(self)
         worker = ProcessingWorker(operation)
         worker.moveToThread(thread)
@@ -229,6 +300,20 @@ class MainWindow(FluentWindow):
         if isinstance(self.active_page, MrPage) and result.outputs:
             stats = result.audio_stats[0] if result.audio_stats else None
             self.active_page.set_result(result.outputs[0], stats)
+        if isinstance(self.active_page, FullStagePage) and isinstance(result, FullStageResult):
+            self.active_page.set_analysis(result.analysis)
+            if result.outputs:
+                self.active_page.status.setText(
+                    tr(self.language, "done_status", path=result.outputs[0])
+                )
+            else:
+                outputs = tr(
+                    self.language,
+                    "stage_analysis_summary",
+                    songs=len(result.analysis.song_clips),
+                    fragments=sum(clip.kind.value == "fragment" for clip in result.analysis.clips),
+                    missing=len(result.analysis.missing_sources),
+                )
         InfoBar.success(
             tr(self.language, "done_title"),
             outputs,

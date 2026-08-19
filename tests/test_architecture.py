@@ -24,10 +24,15 @@ def test_feature_dependency_boundaries():
         imports = _imports(path)
         if relative.parts[0] == "shared":
             forbidden = {name for name in imports if name == "app" or name.startswith("features")}
-        elif relative.parts[:2] == ("features", "reference_removal"):
-            forbidden = {name for name in imports if name.startswith("features.neural_separation")}
-        elif relative.parts[:2] == ("features", "neural_separation"):
-            forbidden = {name for name in imports if name.startswith("features.reference_removal")}
+        elif relative.parts[0] == "features" and len(relative.parts) >= 2:
+            own_feature = relative.parts[1]
+            forbidden = {
+                name
+                for name in imports
+                if name.startswith("features.")
+                and len(name.split(".")) >= 2
+                and name.split(".")[1] != own_feature
+            }
         else:
             forbidden = set()
         violations.extend(f"{relative}: {name}" for name in sorted(forbidden))

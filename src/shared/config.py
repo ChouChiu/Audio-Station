@@ -46,6 +46,8 @@ class AppConfig(QConfig):
     sigma = OptionsConfigItem("Reference", "Sigma", 8, OptionsValidator([1, 3, 8, 16]))
     auto_align = ConfigItem("Reference", "AutoAlign", True, BoolValidator())
     auto_find = ConfigItem("Reference", "AutoFind", True, BoolValidator())
+    center_extraction = ConfigItem("Reference", "CenterExtraction", False, BoolValidator())
+    weak_vocal_protection = ConfigItem("Reference", "WeakVocalProtection", False, BoolValidator())
     model = OptionsConfigItem(
         "Neural",
         "Model",

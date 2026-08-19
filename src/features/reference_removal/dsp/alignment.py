@@ -1,19 +1,40 @@
 from __future__ import annotations
 
+import logging
+import math
+
 import numpy as np
 from scipy.ndimage import median_filter
-from scipy.signal import correlate, correlation_lags
+from scipy.signal import correlate, correlation_lags, resample_poly
+from scipy.signal import stft as scipy_stft
 
 from shared.processing import CancellationToken
+
+logger = logging.getLogger(__name__)
 
 
 def _mono(channels: np.ndarray) -> np.ndarray:
     return np.asarray(channels, dtype=np.float64).mean(axis=0)
 
 
-def _proxy(channels: np.ndarray, length: int, stride: int) -> np.ndarray:
-    """Create a low-rate mono proxy without materializing the full-rate audio."""
-    return np.asarray(channels[:, :length:stride], dtype=np.float64).mean(axis=0)
+def _proxy(channels: np.ndarray, length: int, source_rate: int, target_rate: int) -> np.ndarray:
+    """Create an anti-aliased low-rate proxy for long-range alignment.
+
+    Plain strided sampling folds high-frequency vocals, cymbals and crowd noise
+    into the accompaniment band.  Polyphase resampling keeps those unrelated
+    components from steering the local lag track and gives the proxy an exact
+    rate, so proxy positions map back to source samples without clock error.
+    """
+    divisor = math.gcd(source_rate, target_rate)
+    up = target_rate // divisor
+    down = source_rate // divisor
+    resampled = resample_poly(
+        np.asarray(channels[:, :length], dtype=np.float32),
+        up,
+        down,
+        axis=1,
+    )
+    return np.asarray(resampled, dtype=np.float64).mean(axis=0)
 
 
 def _normalize(values: np.ndarray) -> np.ndarray | None:
@@ -37,13 +58,14 @@ def _gcc_phat_lag(song: np.ndarray, reference: np.ndarray, max_lag: int) -> floa
     cross[~valid] = 0
     correlation = np.fft.irfft(cross, size)
     correlation = np.concatenate((correlation[-max_lag:], correlation[: max_lag + 1]))
-    index = int(np.argmax(correlation))
-    peak = float(correlation[index])
+    score = np.abs(correlation)
+    index = int(np.argmax(score))
+    peak = float(score[index])
     if not np.isfinite(peak) or peak < 1e-5:
         return None
     delta = 0.0
-    if 0 < index < correlation.size - 1:
-        left, center, right = correlation[index - 1 : index + 2]
+    if 0 < index < score.size - 1:
+        left, center, right = score[index - 1 : index + 2]
         denominator = left - 2 * center + right
         if abs(denominator) > 1e-12:
             delta = float(np.clip(0.5 * (left - right) / denominator, -1, 1))
@@ -54,17 +76,105 @@ def _raw_lag(song: np.ndarray, reference: np.ndarray, max_lag: int) -> float | N
     raw = correlate(song, reference, mode="full", method="fft")
     lags = correlation_lags(song.size, reference.size)
     valid = np.abs(lags) <= max_lag
-    if not np.any(valid) or np.max(raw[valid]) <= 1e-5:
+    score = np.abs(raw)
+    if not np.any(valid) or np.max(score[valid]) <= 1e-5:
         return None
     indices = np.flatnonzero(valid)
-    index = int(indices[np.argmax(raw[valid])])
+    index = int(indices[np.argmax(score[valid])])
     lag = float(lags[index])
-    if 0 < index < raw.size - 1:
-        left, center, right = raw[index - 1 : index + 2]
+    if 0 < index < score.size - 1:
+        left, center, right = score[index - 1 : index + 2]
         denominator = left - 2 * center + right
         if abs(denominator) > 1e-12:
             lag += float(np.clip(0.5 * (left - right) / denominator, -1, 1))
     return lag
+
+
+def _spectral_flux_lag(
+    song: np.ndarray,
+    reference: np.ndarray,
+    sample_rate: int,
+    max_lag_seconds: float = 20.0,
+) -> float | None:
+    """Estimate musical offset when two masters have weak waveform coherence.
+
+    Live camera audio and the released master can share note attacks while their
+    waveforms, EQ, compression, vocals and ambience are substantially different.
+    Positive log-spectral flux retains those common attacks and ignores polarity.
+    A separated runner-up check prevents an unrelated reference from producing a
+    confident-looking offset merely because a long correlation was searched.
+    """
+    feature_rate = min(8000, sample_rate)
+    common = min(song.shape[1], reference.shape[1], sample_rate * 60)
+    if common < max(sample_rate // 2, 2048):
+        return None
+
+    def extract(channels: np.ndarray) -> np.ndarray | None:
+        divisor = math.gcd(sample_rate, feature_rate)
+        values = resample_poly(
+            np.asarray(channels[:, :common], dtype=np.float32),
+            feature_rate // divisor,
+            sample_rate // divisor,
+            axis=1,
+        )
+        n_fft = min(1024, values.shape[1])
+        if n_fft < 128:
+            return None
+        hop = max(round(0.02 * feature_rate), 1)
+        overlap = max(n_fft - hop, 0)
+        channel_features: list[np.ndarray] = []
+        for channel in values[:2]:
+            _, _, spectrum = scipy_stft(
+                channel,
+                nperseg=n_fft,
+                noverlap=overlap,
+                boundary=None,
+                padded=False,
+            )
+            magnitude = np.log1p(20.0 * np.abs(spectrum))
+            flux = np.maximum(np.diff(magnitude, axis=1, prepend=magnitude[:, :1]), 0.0)
+            edges = np.unique(np.geomspace(2, magnitude.shape[0], 13).astype(int))
+            if edges.size < 3:
+                return None
+            bands = np.stack(
+                [
+                    np.mean(flux[edges[index] : edges[index + 1]], axis=0)
+                    for index in range(edges.size - 1)
+                ]
+            )
+            bands -= np.median(bands, axis=1, keepdims=True)
+            raw_scale = np.median(np.abs(bands), axis=1, keepdims=True)
+            if float(np.median(raw_scale)) < 1e-4:
+                return None
+            scale = raw_scale + 1e-6
+            channel_features.append(np.clip(bands / scale, -8.0, 8.0))
+        return np.concatenate(channel_features, axis=0)
+
+    song_features = extract(song)
+    reference_features = extract(reference)
+    if song_features is None or reference_features is None:
+        return None
+    scores = None
+    for song_band, reference_band in zip(song_features, reference_features, strict=True):
+        correlation = correlate(song_band, reference_band, mode="full", method="fft")
+        scores = correlation if scores is None else scores + correlation
+    if scores is None:
+        return None
+    lags = correlation_lags(song_features.shape[1], reference_features.shape[1])
+    hop_seconds = max(round(0.02 * feature_rate), 1) / feature_rate
+    valid = np.abs(lags) <= round(max_lag_seconds / hop_seconds)
+    if not np.any(valid):
+        return None
+    valid_lags = lags[valid]
+    valid_scores = scores[valid]
+    best = int(np.argmax(valid_scores))
+    peak = float(valid_scores[best])
+    separation = max(round(0.4 / hop_seconds), 1)
+    competing = np.abs(valid_lags - valid_lags[best]) > separation
+    runner_up = float(np.max(valid_scores[competing], initial=0.0))
+    if not np.isfinite(peak) or peak <= 0.0 or peak < 1.08 * max(runner_up, 1e-12):
+        return None
+    return float(valid_lags[best] * hop_seconds * sample_rate)
 
 
 def _local_track(song: np.ndarray, reference: np.ndarray, rate: int, initial: float):
@@ -88,13 +198,14 @@ def _local_track(song: np.ndarray, reference: np.ndarray, rate: int, initial: fl
             np.convolve(candidate * candidate, np.ones(segment.size), mode="valid")
         )
         scores = np.divide(scores, denominator + 1e-12)
+        similarities = np.abs(scores)
         candidate_lags = begin - (low + np.arange(scores.size))
-        ranked = scores - 0.25 * np.abs(candidate_lags - predicted) / max(search, 1)
+        ranked = similarities - 0.25 * np.abs(candidate_lags - predicted) / max(search, 1)
         best = int(np.argmax(ranked))
-        best_corr = float(scores[best])
+        best_corr = float(similarities[best])
         lag = float(candidate_lags[best])
         predicted_index = int(np.argmin(np.abs(candidate_lags - predicted)))
-        predicted_corr = float(scores[predicted_index])
+        predicted_corr = float(similarities[predicted_index])
         if best_corr < 0.08 or best_corr < predicted_corr + 0.02:
             lag = predicted
         max_change = max(2.0, 0.02 * (center - positions[-1]))
@@ -167,9 +278,8 @@ def align_audio(
     if common < 64:
         return accompaniment
     proxy_rate = min(2000, sample_rate)
-    down = max(1, round(sample_rate / proxy_rate))
-    mix_proxy = _proxy(mix, common, down)
-    ref_proxy = _proxy(accompaniment, common, down)
+    mix_proxy = _proxy(mix, common, sample_rate, proxy_rate)
+    ref_proxy = _proxy(accompaniment, common, sample_rate, proxy_rate)
     mix_norm = _normalize(mix_proxy)
     ref_norm = _normalize(ref_proxy)
     if mix_norm is None or ref_norm is None:
@@ -182,15 +292,29 @@ def align_audio(
     full_check = min(full_mix.size, full_reference.size)
     max_lag = min(sample_rate * 20, full_check - 1)
     near_limit = min(sample_rate // 2, max_lag)
-    lag_samples = _gcc_phat_lag(full_mix[:full_check], full_reference[:full_check], near_limit)
-    if lag_samples is not None and abs(lag_samples) >= 0.95 * near_limit:
-        lag_samples = _gcc_phat_lag(full_mix[:full_check], full_reference[:full_check], max_lag)
+    lag_samples = _spectral_flux_lag(mix, accompaniment, sample_rate)
+    if lag_samples is not None:
+        logger.info(
+            "spectral-flux coarse alignment selected %.1f samples (%.3f s)",
+            lag_samples,
+            lag_samples / sample_rate,
+        )
+    else:
+        lag_samples = _gcc_phat_lag(full_mix[:full_check], full_reference[:full_check], near_limit)
+        if lag_samples is not None and abs(lag_samples) >= 0.95 * near_limit:
+            lag_samples = _gcc_phat_lag(full_mix[:full_check], full_reference[:full_check], max_lag)
     if lag_samples is None:
         lag_samples = _raw_lag(full_mix[:full_check], full_reference[:full_check], max_lag)
     if lag_samples is None:
         return accompaniment
-    positions, lags = _local_track(mix_norm, ref_norm, proxy_rate, lag_samples / down)
-    scale = float(down)
+    scale = sample_rate / proxy_rate
+    positions, lags = _local_track(mix_norm, ref_norm, proxy_rate, lag_samples / scale)
+    logger.info(
+        "local alignment tracked %.3f to %.3f s (median %.3f s)",
+        float(lags[0] / proxy_rate),
+        float(lags[-1] / proxy_rate),
+        float(np.median(lags) / proxy_rate),
+    )
     cancel.raise_if_cancelled()
     return _warp(
         accompaniment,

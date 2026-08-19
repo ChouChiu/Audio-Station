@@ -25,12 +25,20 @@ class ReferenceJob:
     sigma: int = 8
     auto_align: bool = True
     language: str = "zh_cn"
+    center_extraction: bool = False
+    weak_vocal_protection: bool = False
 
     def __post_init__(self) -> None:
         if not 0 <= self.strength <= 100:
             raise ValueError("strength must be in [0, 100]")
         if self.sigma not in {1, 3, 8, 16}:
             raise ValueError("sigma must be one of 1, 3, 8, 16")
+        if self.weak_vocal_protection and not self.center_extraction:
+            raise ValueError("weak vocal protection requires center extraction")
+        if self.algorithm != Algorithm.REFERENCE_CENTER and (
+            self.center_extraction or self.weak_vocal_protection
+        ):
+            raise ValueError("center options require the reference_center algorithm")
 
 
 @dataclass(frozen=True, slots=True)
