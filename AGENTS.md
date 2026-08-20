@@ -2,12 +2,13 @@
 
 ## Project Overview
 
-**Audio Station v1.0.0** (`audio-station`) — a desktop vocal/accompaniment separation tool written in Python 3.11+ / PySide6 with PySide6-Fluent-Widgets (Fluent Design UI). Two independent pipelines share one codebase:
+**Audio Station v1.0.0** (`audio-station`) — a desktop vocal/accompaniment separation tool written in Python 3.11+ / PySide6 with PySide6-Fluent-Widgets (Fluent Design UI). Three workflows share one codebase:
 
-- **MR Remove** (`audio-station mr`): reference-guided cancellation — takes a known accompaniment as reference, aligns it (GCC-PHAT + clock-drift tracking), and cancels it from the mix via one of 7 DSP algorithms (best: `reference_center`, a stereo 2×2 MIMO canceler with phantom-center focus).
+- **MR Remove** (`audio-station mr`): reference-guided cancellation — takes a known accompaniment as reference, aligns it (GCC-PHAT + clock-drift tracking), and cancels it with one direct stereo 2×2 transfer estimate. Phantom-center focus is opt-in.
+- **Full Stage** (GUI): matches multiple sources against a continuous stage recording, exposes an editable timeline, and applies reference cancellation only to enabled matched clips.
 - **AI vocal extraction** (`audio-station ai`): UVR MDX-Net ONNX inference with no reference; models download on demand and are verified by SHA-256.
 
-GUI and CLI are thin shells over the same `run_reference_job` / `run_neural_job` pipeline functions. This is a Python rewrite of an earlier C++/Qt6 codebase; the repo still carries empty scaffold directories and a C++ DSP regression baseline (see below) — treat those as historical artifacts, not build input. License: AGPL-3.0-or-later. README.md (Chinese) is the authoritative user-facing doc.
+GUI and CLI are thin shells over the same `run_reference_job` / `run_neural_job` pipeline functions; full-stage cross-feature rendering is orchestrated in `src/app/full_stage_processing.py`. License: AGPL-3.0-or-later. README.md (Chinese) is the authoritative user-facing doc.
 
 ## Architecture & Data Flow
 
@@ -21,9 +22,9 @@ src/entrypoints (cli.py, gui.py)          — startup only
           └─> src/shared/                  — depends on NOTHING (audio/, dsp/, ui/, i18n, config, logging, processing)
 ```
 
-Invariants enforced by `tests/test_architecture.py`: `shared` must never import `app` or `features.*`; `features.reference_removal` and `features.neural_separation` must never import each other. Adding a feature = one new `src/features/<feature>/` dir; it may import `shared` freely and must not be imported by other features.
+Invariants enforced by `tests/test_architecture.py`: `shared` must never import `app` or `features.*`; feature packages must never import one another. Adding a feature = one new `src/features/<feature>/` dir; it may import `shared` freely and must not be imported by other features.
 
-**Reference pipeline** (`features/reference_removal/processing.py`): `read_audio` (SoundFile, Qt Multimedia fallback) → upmix to stereo → resample accompaniment to song rate (soxr) → optional `align_audio` (GCC-PHAT coarse lag + Lanczos warp) → `process_audio` (blocks of 30 s × sample rate, 2 s overlap, cos²/sin² crossfade) → audio stats (peak/RMS dBFS) → atomic WAV write. Output is 24-bit PCM for `reference_center`, 16-bit otherwise.
+**Reference pipeline** (`features/reference_removal/processing.py`): `read_audio` (SoundFile, Qt Multimedia fallback) → upmix to stereo → resample accompaniment to song rate (soxr) → optional `align_audio` (GCC-PHAT coarse lag + Lanczos warp) → `process_audio` (blocks of 30 s × sample rate, 2 s overlap, cos²/sin² crossfade) → audio stats (peak/RMS dBFS) → atomic 24-bit WAV write.
 
 **Neural pipeline** (`features/neural_separation/processing.py`): resample song to 44.1 kHz → `ensure_model` (search: `--models-dir` override → `MR_REMOVER_MODELS` env → system app-data dir → repo `models/`; download from TRvlvr releases with SHA-256 verify) → `MdxNet.separate` (chunked overlap-add, hanning divider accumulation) → writes `<stem>_vocal.wav` + `<stem>_background.wav` (background = song − vocal).
 
@@ -35,7 +36,8 @@ Invariants enforced by `tests/test_architecture.py`: `shared` must never import 
 |---|---|
 | `src/entrypoints/` | `cli.py` (argparse: `mr`, `ai`, `--selftest`), `gui.py`, `__main__.py` (`python -m entrypoints`) |
 | `src/app/` | `main_window.py` (FluentWindow shell, 4 pages, worker orchestration), `worker.py` (QThread adapter), `version.py` |
-| `src/features/reference_removal/` | MR pipeline: `dsp/algorithms.py` (7 algorithms, MIMO), `dsp/alignment.py`, `finder.py` (auto accompaniment match), `processing.py`, `page.py`, `models.py` |
+| `src/features/reference_removal/` | MR pipeline: `dsp/algorithms.py` (direct stereo cancellation), `dsp/alignment.py`, `finder.py` (auto accompaniment match), `processing.py`, `page.py`, `models.py` |
+| `src/features/full_stage/` | Multi-source fingerprint matching, timeline models, and the full-stage page |
 | `src/features/neural_separation/` | AI pipeline: `inference.py` (MdxNet ONNX wrapper), `model_store.py` (search/download/verify), `catalog.py` (4 shipped model entries), `processing.py`, `page.py` |
 | `src/features/home/`, `src/features/settings/` | HomePage (brand + entry cards), SettingsPage (language/theme/log level) |
 | `src/shared/audio/` | `io.py`: `AudioData` planar float32 (np.memmap temp files), `read_audio`, `resample_audio` (soxr), `write_wav_atomic` (temp + `os.replace`) |
@@ -47,8 +49,6 @@ Invariants enforced by `tests/test_architecture.py`: `shared` must never import 
 | `models/` | 4 prebuilt ONNX weights (gitignored, never committed); not shipped in wheels/standalone |
 | `deployment/` | `main.py` — standalone Nuitka entry shim |
 
-Stale scaffold (empty, no `.py`, not shipped): `src/{presentation,application,neural,audio,dsp,audio_station}` and `tests/{unit,gui,integration}`. Do not create files there; they are leftovers of earlier iterations.
-
 ## Development Commands
 
 ```bash
@@ -58,7 +58,7 @@ python -m pip install -e '.[dev]'
 # run
 audio-station                      # GUI
 python -m entrypoints              # GUI (same)
-audio-station mr <song> <acc> <out.wav> --algorithm reference_center --strength 75 --sigma 8 --align --lang zh_cn
+audio-station mr <song> <acc> <out.wav> --strength 75 --sigma 8 --align --lang zh_cn
 audio-station ai <song> [--output-dir <dir>] [--model mdxnet_1] [--models-dir <dir>]
 audio-station --selftest           # self-test smoke (offscreen-safe)
 
@@ -73,25 +73,24 @@ python -m build                    # sdist+wheel
 python -m pip install -e '.[deploy]' && pyside6-deploy -c pysidedeploy.spec
 ```
 
-Algorithm keys (CLI `--algorithm`, config, i18n `algo_*`): `reference_center`, `soft_mask`, `spectral_subtraction`, `wiener_filter`, `frequency_weighted`, `binary_mask`, `phase_sensitive`. Language keys: `zh_cn`, `ja_jp`, `ko_kr`.
+Language keys: `zh_cn`, `ja_jp`, `ko_kr`.
 
 ## Code Conventions & Common Patterns
 
-- **Typing**: type hints everywhere (`from __future__ import annotations`, PEP 604 `X | None`, `collections.abc`); frozen+slots dataclasses for jobs/config; `StrEnum` for `Algorithm`. snake_case functions/vars; Qt widget attributes camelCase.
+- **Typing**: type hints everywhere (`from __future__ import annotations`, PEP 604 `X | None`, `collections.abc`); frozen+slots dataclasses for jobs/config. snake_case functions/vars; Qt widget attributes camelCase.
 - **Errors**: raise `ValueError`/`KeyError`/`FileNotFoundError`/`RuntimeError`. Long jobs catch `(FileNotFoundError, KeyError, ValueError)` → CLI exit 2; generic → exit 1. GUI surfaces via worker `failed` signal + InfoBar. Cancellation via `CancellationToken.raise_if_cancelled()` — never swallow cancellation; documented fallbacks (e.g. alignment failure → `logger.warning` + fallback) are the only tolerated swallows.
 - **Logging**: `logging.getLogger(__name__)`; single-line format `YYYY-MM-DD HH:MM:SS.xx [LEVEL] module: message` (`ApplicationLogFormatter`, `src/shared/logging.py`); CLI progress prints `progress: %3d%%`. Qt/FFmpeg messages routed to `qt.*` loggers.
 - **i18n**: `tr(language, key, **values)` (`src/shared/i18n.py`); unknown key returns the key itself — never rely on that, and adding/removing a key MUST be mirrored in all three locale JSONs (test enforces key parity). UI language switching calls page `retranslate(language)` and rebuilds combo boxes.
-- **Config**: qfluentwidgets `QConfig` (`src/shared/config.py`, `cfg` singleton, `config.json` in AppConfigLocation); legacy `lossless`/`lossless_center` algorithm values are migrated to `reference_center` on load.
+- **Config**: qfluentwidgets `QConfig` (`src/shared/config.py`, `cfg` singleton, `config.json` in AppConfigLocation).
 - **Qt**: pages declare `Signal()`s and never touch the worker directly; `MainWindow` connects them. Prefer `SmoothComboBox` (qfw slide animation is disabled there) and FormCard/PageScrollArea from `shared/ui/`. Preview = `QMediaPlayer` + `QAudioOutput`.
 - **Memory discipline** (long audio): stream in 262 144-frame blocks, use `create_pcm_audio` memmap + `cleanup()`/`release_pages()`; never accumulate whole files in RAM; add a `QTimer` poll for cancellation inside decoder loops.
-- **Adding an algorithm**: `Algorithm` enum member in `features/reference_removal/models.py` + branch in `process_channel` (`dsp/algorithms.py`) + config validator + `algo_*` i18n keys ×3 + CLI `--algorithm` choices + a parametrized case in `tests/features/reference_removal/test_dsp.py`.
 - **Adding a source dir**: register in THREE places or it silently ships nowhere: `[tool.hatch.build.targets.wheel] packages` + `[tool.pyside6-project] files` (both `pyproject.toml`) + `include-package` in `pysidedeploy.spec`.
 
 ## Important Files
 
 | File | Role |
 |---|---|
-| `pyproject.toml` | hatchling packaging; ruff + pytest config; `[tool.pyside6-project] files` = authoritative shipped-source roster (all 35 .py files) |
+| `pyproject.toml` | hatchling packaging; ruff + pytest config; `[tool.pyside6-project] files` = authoritative shipped-source roster |
 | `pysidedeploy.spec` | Nuitka standalone build (dir mode, `deployment/main.py` → `dist/`) |
 | `src/entrypoints/cli.py` | `audio-station` entry point (`main`); mr/ai subcommands, `--selftest` |
 | `src/app/main_window.py` | FluentWindow shell: navigation, i18n/theme, worker orchestration, auto-find |
@@ -99,14 +98,13 @@ Algorithm keys (CLI `--algorithm`, config, i18n `algo_*`): `reference_center`, `
 | `src/shared/processing.py` | `CancellationToken`, `ProcessingCancelled`, `ProgressEvent`, `ProcessingResult`, `ProgressCallback` |
 | `src/shared/audio/io.py` | memmap audio loading, soxr resample, atomic WAV write (16/24-bit) |
 | `src/shared/config.py` / `i18n.py` / `logging.py` | settings persistence, `tr()`, single-line log format |
-| `src/features/reference_removal/dsp/algorithms.py` | 7 cancellation algorithms incl. `_reference_center_stereo` 2×2 MIMO + drift compensation |
+| `src/features/reference_removal/dsp/algorithms.py` | Direct 2×2 reference cancellation, optional center focus, and linked peak protection |
 | `src/features/reference_removal/dsp/alignment.py` | GCC-PHAT coarse alignment + local drift tracking + Lanczos warp |
 | `src/features/neural_separation/inference.py` / `model_store.py` | MdxNet ONNX wrapper (chunked overlap-add); model search/download/SHA-256 |
-| `src/resources/model_data.json` | 61-entry MDX-Net spec table keyed by model-MD5 (`compensate`, `mdx_dim_f_set`, `mdx_dim_t_set`, `mdx_n_fft_scale_set`, `primary_stem`) |
+| `src/resources/model_data.json` | 65-entry MDX-Net spec table keyed by model-MD5 (`compensate`, `mdx_dim_f_set`, `mdx_dim_t_set`, `mdx_n_fft_scale_set`, `primary_stem`) |
 | `src/resources/i18n/*.json` | UI strings: flat snake_case keys, zh_cn/ja_jp/ko_kr (~120 keys, key-parity tested) |
 | `tests/test_architecture.py` | AST import-boundary gate (shared isolation, feature isolation) |
 | `tests/conftest.py` | forces `QT_QPA_PLATFORM=offscreen`, adds `--runslow`, auto-skips `slow` tests |
-| `tests/benchmarks/cpp_dsp_baseline.json` | Pearson metrics from C++ HEAD `33e67a7` (7 algos × 5 scenes) — migration provenance only, no test loads it |
 
 ## Runtime/Tooling Preferences
 
@@ -115,11 +113,10 @@ Algorithm keys (CLI `--algorithm`, config, i18n `algo_*`): `reference_center`, `
 - **DSP deps**: numpy ≥2, scipy, soundfile, soxr; neural: onnxruntime (CPU). All pinned to bounded ranges in `pyproject.toml`.
 - **Lint/format**: ruff only (`line-length = 100`, rules E/F/I/UP/B/SIM/RUF, E501 ignored). Format = `ruff format`; there is no separate black/isort.
 - **Deploy**: Nuitka 4.1.3 via `pyside6-deploy`; standalone dir mode only. ONNX weights are never packaged (downloaded at runtime; `models/*.onnx` gitignored).
-- `.vscode/settings.json` is a stale C++/meson leftover (no Python settings) — ignore. Empty scaffold dirs under `src/` and `tests/` are likewise not part of the build.
 
 ## Testing & QA
 
-- **Framework**: pytest ≥8.3 + pytest-qt ≥4.4. Run: `QT_QPA_PLATFORM=offscreen .venv/bin/pytest` (offscreen mandatory; conftest sets it and adds `--runslow`, auto-skipping `@pytest.mark.slow` tests otherwise). Marker `model` is declared but currently unused; `--runslow` runs the 15-minute, 44.1 kHz stereo `reference_center` benchmark (`tests/benchmarks/test_long_audio.py`) asserting seam smoothness and peak RSS ≤ 1.5 GiB.
-- **Layout**: `tests/` mirrors `src/` path-for-path. Per-area coverage: audio IO/resample/atomic-write (`tests/shared/test_audio.py`), STFT round-trip (`test_spectral.py`), i18n key parity (`test_i18n.py`), log format (`test_logging.py`), all 7 algorithms parametrized over the `Algorithm` enum + alignment/MIMO (`tests/features/reference_removal/test_dsp.py`), drift/focus/jitter regressions (`test_dsp_regression.py`), finder similarity (`test_finder.py`), end-to-end reference job + AudioStats + same-input rejection (`test_processing.py`), neural chunked overlap-add identity (`test_neural.py`), CLI legacy-name migration (`tests/entrypoints/test_cli.py`), GUI navigation/theme/combos/stats via pytest-qt (`tests/app/test_gui.py`).
+- **Framework**: pytest ≥8.3 + pytest-qt ≥4.4. Run: `QT_QPA_PLATFORM=offscreen .venv/bin/pytest` (offscreen mandatory; conftest sets it and adds `--runslow`, auto-skipping `@pytest.mark.slow` tests otherwise). Marker `model` is declared but currently unused; `--runslow` runs the 15-minute, 44.1 kHz stereo reference-cancellation benchmark (`tests/benchmarks/test_long_audio.py`) asserting seam smoothness and peak RSS ≤ 1.5 GiB.
+- **Layout**: `tests/` mirrors `src/` path-for-path. Per-area coverage: audio IO/resample/atomic-write (`tests/shared/test_audio.py`), STFT round-trip (`test_spectral.py`), i18n key parity (`test_i18n.py`), log format (`test_logging.py`), direct reference cancellation + alignment/MIMO (`tests/features/reference_removal/test_dsp.py`), drift/focus/jitter regressions (`test_dsp_regression.py`), finder similarity (`test_finder.py`), end-to-end reference job + AudioStats + same-input rejection (`test_processing.py`), neural chunked overlap-add identity (`test_neural.py`), CLI option handling (`tests/entrypoints/test_cli.py`), GUI navigation/theme/combos/stats via pytest-qt (`tests/app/test_gui.py`).
 - **Architecture gate**: `tests/test_architecture.py` parses ASTs — any `shared → app/features` or feature↔feature import fails the suite.
-- **Expectations**: synthetic DSP metrics are regression evidence only — they do not claim real-music quality (stated in README). `cpp_dsp_baseline.json` documents the pre-rewrite C++ numbers; nothing asserts against it today. Run `audio-station --selftest` for a quick pipeline smoke check before committing DSP changes.
+- **Expectations**: synthetic DSP metrics are regression evidence only — they do not claim real-music quality (stated in README). Run `audio-station --selftest` for a quick pipeline smoke check before committing DSP changes.
