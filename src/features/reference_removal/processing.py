@@ -72,10 +72,9 @@ def run_reference_job(
     progress: ProgressCallback = lambda _event: None,
 ) -> ProcessingResult:
     logger.info(
-        "starting reference job: song=%s accompaniment=%s algorithm=%s center=%s protection=%s",
+        "starting reference job: song=%s accompaniment=%s center=%s protection=%s",
         job.song,
         job.accompaniment,
-        job.algorithm.value,
         job.center_extraction,
         job.weak_vocal_protection,
     )
@@ -124,14 +123,13 @@ def run_reference_job(
             reference.samples[:, :length],
             song.sample_rate,
             job.strength / 100.0,
-            job.algorithm,
             job.sigma,
             token,
             processed_audio.samples,
             center_extraction=job.center_extraction,
             weak_vocal_protection=job.weak_vocal_protection,
         )
-        bit_depth = 24 if job.algorithm.value == "reference_center" else 16
+        bit_depth = 24
         _emit(progress, 86, job.language, "analyzing_output")
         stats = _audio_stats(processed_audio, bit_depth, token)
         _emit(progress, 90, job.language, "saving")

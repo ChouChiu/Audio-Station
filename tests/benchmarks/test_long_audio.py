@@ -6,14 +6,13 @@ import numpy as np
 import pytest
 
 from features.reference_removal.dsp import process_audio
-from features.reference_removal.models import Algorithm
 from shared.audio import create_pcm_audio
 from shared.processing import CancellationToken
 
 
 @pytest.mark.slow
 def test_fifteen_minute_stereo_rss_length_and_seams():
-    """Synthetic migration evidence only; this is not a real-music quality claim."""
+    """Synthetic regression evidence only; this is not a real-music quality claim."""
     sample_rate = 44_100
     frames = 15 * 60 * sample_rate
     song = create_pcm_audio(2, frames, sample_rate)
@@ -36,7 +35,6 @@ def test_fifteen_minute_stereo_rss_length_and_seams():
             reference.samples,
             sample_rate,
             0.75,
-            Algorithm.REFERENCE_CENTER,
             8,
             CancellationToken(),
             output.samples,

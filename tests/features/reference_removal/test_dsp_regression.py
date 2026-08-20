@@ -1,8 +1,7 @@
 import numpy as np
 import pytest
 
-from features.reference_removal.dsp import align_audio, process_audio, process_channel
-from features.reference_removal.models import Algorithm
+from features.reference_removal.dsp import align_audio, process_audio
 
 
 def correlation(first, second):
@@ -10,7 +9,7 @@ def correlation(first, second):
 
 
 @pytest.mark.parametrize("rate", [0.004, 0.01])
-def test_reference_center_tracks_tempo_drift(rate):
+def test_reference_cancellation_tracks_tempo_drift(rate):
     sample_rate = 22_050
     length = sample_rate * 5
     time = np.arange(length) / sample_rate
@@ -19,14 +18,12 @@ def test_reference_center_tracks_tempo_drift(rate):
     drifted = np.interp(np.arange(length) / (1 + rate), np.arange(length), reference)
     mixture = vocal + drifted
     aligned = align_audio(np.stack([mixture] * 2), np.stack([reference] * 2), sample_rate)
-    output = process_audio(
-        np.stack([mixture] * 2), aligned, sample_rate, 1.0, Algorithm.REFERENCE_CENTER, 8
-    )
+    output = process_audio(np.stack([mixture] * 2), aligned, sample_rate, 1.0, 8)
     assert correlation(output[0], vocal) > 0.98
     assert abs(correlation(output[0], reference)) < 0.05
 
 
-def test_reference_center_preserves_centered_non_reference_content():
+def test_reference_cancellation_preserves_centered_non_reference_content():
     sample_rate = 22_050
     length = sample_rate * 5
     time = np.arange(length) / sample_rate
@@ -39,14 +36,13 @@ def test_reference_center_preserves_centered_non_reference_content():
         np.stack([reference] * 2),
         sample_rate,
         1.0,
-        Algorithm.REFERENCE_CENTER,
         8,
     )
     assert correlation(output[0], vocal) > 0.96
     assert correlation(output[0], vocal + noise) > 0.96
 
 
-def test_reference_center_does_not_chase_an_unrelated_reference():
+def test_reference_cancellation_does_not_chase_an_unrelated_reference():
     sample_rate = 22_050
     length = sample_rate * 5
     time = np.arange(length) / sample_rate
@@ -56,20 +52,19 @@ def test_reference_center_does_not_chase_an_unrelated_reference():
     unrelated_reference = rng.normal(0.0, 0.12, length)
     mixture = vocal + ambience
 
-    output = process_channel(
-        mixture,
-        unrelated_reference,
+    output = process_audio(
+        np.stack([mixture] * 2),
+        np.stack([unrelated_reference] * 2),
         sample_rate,
         1.0,
-        Algorithm.REFERENCE_CENTER,
         8,
-    )
+    )[0]
 
     assert correlation(output, mixture) > 0.999
     assert np.sqrt(np.mean((output - mixture) ** 2)) < 0.01
 
 
-def test_reference_center_regularizes_a_nearly_mono_reference():
+def test_reference_cancellation_regularizes_a_nearly_mono_reference():
     sample_rate = 22_050
     length = sample_rate * 4
     time = np.arange(length) / sample_rate
@@ -84,7 +79,6 @@ def test_reference_center_regularizes_a_nearly_mono_reference():
         reference,
         sample_rate,
         1.0,
-        Algorithm.REFERENCE_CENTER,
         8,
     )
 
@@ -92,7 +86,7 @@ def test_reference_center_regularizes_a_nearly_mono_reference():
     assert min(correlation(output[0], vocal), correlation(output[1], vocal)) > 0.98
 
 
-def test_reference_center_suppresses_wide_audience_and_enhances_center_vocal():
+def test_reference_cancellation_suppresses_wide_audience_and_enhances_center_vocal():
     sample_rate = 22_050
     length = sample_rate * 5
     time = np.arange(length) / sample_rate
@@ -114,7 +108,6 @@ def test_reference_center_suppresses_wide_audience_and_enhances_center_vocal():
         reference,
         sample_rate,
         1.0,
-        Algorithm.REFERENCE_CENTER,
         8,
         center_extraction=True,
     )
@@ -128,7 +121,7 @@ def test_reference_center_suppresses_wide_audience_and_enhances_center_vocal():
     assert np.sqrt(np.mean(output_side**2)) < 0.6 * np.sqrt(np.mean(input_side**2))
 
 
-def test_reference_center_protects_quiet_vocal_buried_in_wide_backing():
+def test_reference_cancellation_protects_quiet_vocal_buried_in_wide_backing():
     sample_rate = 22_050
     length = sample_rate * 6
     time = np.arange(length) / sample_rate
@@ -144,7 +137,6 @@ def test_reference_center_protects_quiet_vocal_buried_in_wide_backing():
         silent_reference,
         sample_rate,
         0.75,
-        Algorithm.REFERENCE_CENTER,
         8,
         center_extraction=True,
         weak_vocal_protection=True,
@@ -161,7 +153,7 @@ def test_reference_center_protects_quiet_vocal_buried_in_wide_backing():
     assert np.isfinite(output).all()
 
 
-def test_alignment_and_reference_center_handle_segment_jitter():
+def test_alignment_and_reference_cancellation_handle_segment_jitter():
     sample_rate = 22_050
     length = sample_rate * 5
     time = np.arange(length) / sample_rate
@@ -176,8 +168,6 @@ def test_alignment_and_reference_center_handle_segment_jitter():
         jittered[np.arange(start, end)[valid]] = reference[source[valid]]
     mixture = vocal + jittered
     aligned = align_audio(np.stack([mixture] * 2), np.stack([reference] * 2), sample_rate)
-    output = process_audio(
-        np.stack([mixture] * 2), aligned, sample_rate, 1.0, Algorithm.REFERENCE_CENTER, 8
-    )
+    output = process_audio(np.stack([mixture] * 2), aligned, sample_rate, 1.0, 8)
     assert correlation(output[0], vocal) > 0.96
     assert abs(correlation(output[0], reference)) < 0.08

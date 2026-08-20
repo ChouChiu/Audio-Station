@@ -14,7 +14,7 @@ from features.full_stage import (
     analyze_full_stage,
 )
 from features.reference_removal.dsp import align_audio, process_audio
-from features.reference_removal.models import Algorithm, AudioStats
+from features.reference_removal.models import AudioStats
 from shared.audio import create_pcm_audio, read_audio, resample_audio, write_wav_atomic
 from shared.i18n import tr
 from shared.processing import CancellationToken, ProgressCallback, ProgressEvent
@@ -229,7 +229,6 @@ def run_full_stage_job(
                     aligned_audio.samples,
                     stage.sample_rate,
                     job.strength / 100.0,
-                    Algorithm.REFERENCE_CENTER,
                     job.sigma,
                     token,
                     processed_audio.samples,

@@ -178,7 +178,7 @@ class MainWindow(FluentWindow):
                 weak_vocal_protection=self.mr.weak_vocal_protection.isChecked(),
             )
         except (ValueError, TypeError):
-            self._warning("warn_invalid_algorithm")
+            self._warning("warn_invalid_parameters")
             return
         cfg.set(cfg.sigma, job.sigma)
         cfg.set(cfg.auto_align, job.auto_align)

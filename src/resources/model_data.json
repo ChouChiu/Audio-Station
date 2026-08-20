@@ -1,4 +1,32 @@
 {
+    "1284cfb6ca5cbe68778a392bf92fe448": {
+        "compensate": 1.75,
+        "mdx_dim_f_set": 3072,
+        "mdx_dim_t_set": 8,
+        "mdx_n_fft_scale_set": 7680,
+        "primary_stem": "Vocals"
+    },
+    "1bbcb39d8a4be721d9322e62f13de1c1": {
+        "compensate": 1.035,
+        "mdx_dim_f_set": 2048,
+        "mdx_dim_t_set": 8,
+        "mdx_n_fft_scale_set": 6144,
+        "primary_stem": "Vocals"
+    },
+    "1fca95895de30c3ed5db3cd235a9dbeb": {
+        "compensate": 1.035,
+        "mdx_dim_f_set": 2048,
+        "mdx_dim_t_set": 8,
+        "mdx_n_fft_scale_set": 6144,
+        "primary_stem": "Vocals"
+    },
+    "c86b8d79e5256ae0010fb742e4aff88a": {
+        "compensate": 1.035,
+        "mdx_dim_f_set": 3072,
+        "mdx_dim_t_set": 8,
+        "mdx_n_fft_scale_set": 7680,
+        "primary_stem": "Vocals"
+    },
     "0ddfc0eb5792638ad5dc27850236c246": {
         "compensate": 1.035,
         "mdx_dim_f_set": 2048,

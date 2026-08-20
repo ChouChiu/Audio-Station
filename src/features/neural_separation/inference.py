@@ -26,33 +26,19 @@ class MdxNetSpec:
     primary_stem: str = "Vocals"
 
 
-_FALLBACKS = {
-    "UVR_MDXNET_Main.onnx": MdxNetSpec(compensate=1.75),
-    "UVR_MDXNET_1_9703.onnx": MdxNetSpec(n_fft=6144, dim_f=2048, compensate=1.035),
-    "Kim_Vocal_1.onnx": MdxNetSpec(compensate=1.035),
-    "kuielab_b_vocals.onnx": MdxNetSpec(n_fft=6144, dim_f=2048, compensate=1.035),
-}
-
-
 def spec_for_model(path: Path) -> MdxNetSpec:
     digest = hashlib.md5(path.read_bytes()).hexdigest()
-    try:
-        table = json.loads(resource_path("model_data.json").read_text(encoding="utf-8"))
-        entry = table.get(digest)
-        if entry and "mdx_n_fft_scale_set" in entry:
-            return MdxNetSpec(
-                n_fft=int(entry.get("mdx_n_fft_scale_set", 7680)),
-                dim_f=int(entry.get("mdx_dim_f_set", 3072)),
-                dim_t=1 << int(entry.get("mdx_dim_t_set", 8)),
-                compensate=float(entry.get("compensate", 1.0)),
-                primary_stem=str(entry.get("primary_stem", "Vocals")),
-            )
-    except (OSError, ValueError, TypeError):
-        pass
-    try:
-        return _FALLBACKS[path.name]
-    except KeyError as error:
-        raise ValueError(f"unknown MDX-Net model: {path.name}") from error
+    table = json.loads(resource_path("model_data.json").read_text(encoding="utf-8"))
+    entry = table.get(digest)
+    if not entry or "mdx_n_fft_scale_set" not in entry:
+        raise ValueError(f"unknown MDX-Net model: {path.name}")
+    return MdxNetSpec(
+        n_fft=int(entry.get("mdx_n_fft_scale_set", 7680)),
+        dim_f=int(entry.get("mdx_dim_f_set", 3072)),
+        dim_t=1 << int(entry.get("mdx_dim_t_set", 8)),
+        compensate=float(entry.get("compensate", 1.0)),
+        primary_stem=str(entry.get("primary_stem", "Vocals")),
+    )
 
 
 InferFunction = Callable[[np.ndarray], np.ndarray]

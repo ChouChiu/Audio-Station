@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 import soundfile as sf
 
-from features.reference_removal.models import Algorithm, ReferenceJob
+from features.reference_removal.models import ReferenceJob
 from features.reference_removal.processing import run_reference_job
 from shared.processing import CancellationToken
 
@@ -21,7 +21,7 @@ def test_reference_pipeline_end_to_end(tmp_path: Path):
     sf.write(accompaniment, np.stack([reference] * 2, axis=1), sample_rate)
     events = []
     result = run_reference_job(
-        ReferenceJob(song, accompaniment, output, Algorithm.REFERENCE_CENTER, 100, 8, False),
+        ReferenceJob(song, accompaniment, output, 100, 8, False),
         CancellationToken(),
         events.append,
     )
@@ -48,7 +48,6 @@ def test_reference_pipeline_rejects_same_song_and_accompaniment(tmp_path: Path):
         song,
         song,
         tmp_path / "output.wav",
-        Algorithm.REFERENCE_CENTER,
         100,
         8,
         False,

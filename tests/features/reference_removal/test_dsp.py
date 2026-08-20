@@ -1,9 +1,8 @@
 import numpy as np
 import pytest
 
-from features.reference_removal.dsp import align_audio, alignment, process_audio, process_channel
+from features.reference_removal.dsp import align_audio, alignment, process_audio
 from features.reference_removal.dsp.alignment import _spectral_flux_lag
-from features.reference_removal.models import Algorithm
 from shared.audio import create_pcm_audio
 from shared.processing import CancellationToken, ProcessingCancelled
 
@@ -126,16 +125,7 @@ def test_confident_musical_offset_is_not_overridden_by_gcc(monkeypatch):
     assert aligned.shape == reference.shape
 
 
-@pytest.mark.parametrize("algorithm", list(Algorithm))
-def test_all_algorithms_retain_more_vocal_than_reference(scene, algorithm):
-    sample_rate, vocal, instrumental, mix = scene
-    output = process_channel(mix, instrumental, sample_rate, 0.5, algorithm, 8)
-    assert output.shape == mix.shape
-    assert np.isfinite(output).all()
-    assert corr(output, vocal) > corr(output, instrumental)
-
-
-def test_reference_center_stereo_mimo_cancels_crossfeed():
+def test_reference_cancellation_stereo_mimo_cancels_crossfeed():
     sample_rate = 16_000
     time = np.arange(sample_rate * 2) / sample_rate
     left_ref = np.sin(2 * np.pi * 123 * time) * 0.25
@@ -148,14 +138,12 @@ def test_reference_center_stereo_mimo_cancels_crossfeed():
             right_vocal - 0.26 * left_ref + 0.81 * right_ref,
         ]
     )
-    output = process_audio(
-        mix, np.stack([left_ref, right_ref]), sample_rate, 1.0, Algorithm.REFERENCE_CENTER, 8
-    )
+    output = process_audio(mix, np.stack([left_ref, right_ref]), sample_rate, 1.0, 8)
     assert min(corr(output[0], left_vocal), corr(output[1], right_vocal)) > 0.96
     assert max(abs(corr(output[0], left_ref)), abs(corr(output[1], right_ref))) < 0.12
 
 
-def test_reference_center_cancels_inverted_reference_then_enhances_center():
+def test_reference_cancellation_cancels_inverted_reference_then_enhances_center():
     sample_rate = 16_000
     length = sample_rate * 4
     rng = np.random.default_rng(93)
@@ -175,7 +163,6 @@ def test_reference_center_cancels_inverted_reference_then_enhances_center():
         reference,
         sample_rate,
         1.0,
-        Algorithm.REFERENCE_CENTER,
         8,
         center_extraction=True,
     )
@@ -186,7 +173,7 @@ def test_reference_center_cancels_inverted_reference_then_enhances_center():
     assert 1.1 < center_gain < 1.3
 
 
-def test_reference_center_defaults_to_plain_cancellation_without_spatial_extraction():
+def test_reference_cancellation_defaults_to_plain_cancellation_without_spatial_extraction():
     sample_rate = 16_000
     length = sample_rate * 2
     time = np.arange(length) / sample_rate
@@ -203,7 +190,6 @@ def test_reference_center_defaults_to_plain_cancellation_without_spatial_extract
         np.zeros_like(mixture),
         sample_rate,
         0.75,
-        Algorithm.REFERENCE_CENTER,
         8,
     )
 
@@ -219,7 +205,6 @@ def test_bypass_and_cancellation(scene):
             np.stack([instrumental] * 2),
             sample_rate,
             0,
-            Algorithm.REFERENCE_CENTER,
             8,
         ),
         stereo.astype(np.float32),
@@ -232,13 +217,12 @@ def test_bypass_and_cancellation(scene):
             np.stack([instrumental] * 2),
             sample_rate,
             1,
-            Algorithm.REFERENCE_CENTER,
             8,
             token,
         )
 
 
-def test_reference_center_applies_linked_minus_one_db_peak_protection():
+def test_reference_cancellation_applies_linked_minus_one_db_peak_protection():
     sample_rate = 16_000
     length = sample_rate * 2
     time = np.arange(length) / sample_rate
@@ -256,7 +240,6 @@ def test_reference_center_applies_linked_minus_one_db_peak_protection():
         reference,
         sample_rate,
         1.0,
-        Algorithm.REFERENCE_CENTER,
         8,
     )
 
@@ -266,7 +249,7 @@ def test_reference_center_applies_linked_minus_one_db_peak_protection():
     assert np.max(np.abs(output[1])) < ceiling
 
 
-def test_reference_center_strength_fades_center_enhancement_from_bypass():
+def test_reference_cancellation_strength_fades_center_enhancement_from_bypass():
     sample_rate = 16_000
     length = sample_rate * 2
     time = np.arange(length) / sample_rate
@@ -285,7 +268,6 @@ def test_reference_center_strength_fades_center_enhancement_from_bypass():
         silent_reference,
         sample_rate,
         0.01,
-        Algorithm.REFERENCE_CENTER,
         8,
         center_extraction=True,
     )
@@ -294,7 +276,6 @@ def test_reference_center_strength_fades_center_enhancement_from_bypass():
         silent_reference,
         sample_rate,
         0.75,
-        Algorithm.REFERENCE_CENTER,
         8,
         center_extraction=True,
     )
@@ -304,7 +285,7 @@ def test_reference_center_strength_fades_center_enhancement_from_bypass():
     assert low_change < 0.03 * default_change
 
 
-def test_reference_center_clamps_strength_above_one(scene):
+def test_reference_cancellation_clamps_strength_above_one(scene):
     sample_rate, _vocal, instrumental, mix = scene
     stereo_mix = np.stack([mix, mix])
     stereo_reference = np.stack([instrumental, instrumental])
@@ -314,7 +295,6 @@ def test_reference_center_clamps_strength_above_one(scene):
         stereo_reference,
         sample_rate,
         1.0,
-        Algorithm.REFERENCE_CENTER,
         8,
     )
     excessive = process_audio(
@@ -322,7 +302,6 @@ def test_reference_center_clamps_strength_above_one(scene):
         stereo_reference,
         sample_rate,
         5.0,
-        Algorithm.REFERENCE_CENTER,
         8,
     )
 
@@ -338,7 +317,6 @@ def test_process_audio_writes_supplied_disk_buffer(scene):
             np.stack([instrumental] * 2),
             sample_rate,
             0.5,
-            Algorithm.SOFT_MASK,
             8,
             output=target.samples,
         )

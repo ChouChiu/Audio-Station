@@ -17,15 +17,9 @@ from features.neural_separation import (
     model_catalog,
     run_neural_job,
 )
-from features.reference_removal import Algorithm, ReferenceJob, run_reference_job
+from features.reference_removal import ReferenceJob, run_reference_job
 from shared.logging import configure_logging, set_log_level
 from shared.processing import CancellationToken, ProcessingCancelled, ProgressEvent
-
-
-def _algorithm_key(value: str) -> str:
-    if value in {"lossless", "lossless_center"}:
-        return Algorithm.REFERENCE_CENTER.value
-    return value
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -40,12 +34,6 @@ def build_parser() -> argparse.ArgumentParser:
     reference.add_argument("song", type=Path)
     reference.add_argument("accompaniment", type=Path)
     reference.add_argument("output", type=Path)
-    reference.add_argument(
-        "--algorithm",
-        type=_algorithm_key,
-        choices=[item.value for item in Algorithm],
-        default=Algorithm.REFERENCE_CENTER.value,
-    )
     reference.add_argument(
         "--strength", type=int, choices=range(0, 101), default=75, metavar="0..100"
     )
@@ -107,7 +95,6 @@ def main(argv: list[str] | None = None) -> int:
                 song=args.song,
                 accompaniment=args.accompaniment,
                 output=args.output,
-                algorithm=Algorithm(args.algorithm),
                 strength=args.strength,
                 sigma=args.sigma,
                 auto_align=args.align,

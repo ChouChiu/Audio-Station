@@ -1,13 +1,14 @@
+import pytest
+
 from entrypoints.cli import build_parser
 
 
-def test_legacy_reference_algorithm_names_are_migrated():
+def test_reference_command_rejects_removed_algorithm_option():
     parser = build_parser()
-    for legacy in ("lossless", "lossless_center"):
-        args = parser.parse_args(
-            ["mr", "song.wav", "reference.flac", "output.wav", "--algorithm", legacy]
+    with pytest.raises(SystemExit):
+        parser.parse_args(
+            ["mr", "song.wav", "reference.flac", "output.wav", "--algorithm", "anything"]
         )
-        assert args.algorithm == "reference_center"
 
 
 def test_reference_enhancement_switches_default_off_and_can_be_enabled():

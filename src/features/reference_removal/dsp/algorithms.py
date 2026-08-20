@@ -5,7 +5,6 @@ import mmap
 import numpy as np
 from scipy.ndimage import gaussian_filter
 
-from features.reference_removal.models import Algorithm
 from shared.dsp import fft_frequencies, istft, stft
 from shared.processing import CancellationToken
 
@@ -144,7 +143,7 @@ def _phantom_center_enhance(
     )
 
 
-def _reference_center_stereo(
+def _cancel_reference(
     song: np.ndarray,
     reference: np.ndarray,
     sample_rate: int,
@@ -220,113 +219,11 @@ def _reference_center_stereo(
     )
 
 
-def process_channel(
-    song: np.ndarray,
-    reference: np.ndarray,
-    sample_rate: int,
-    strength: float,
-    algorithm: Algorithm,
-    sigma: float,
-    *,
-    n_fft: int = 2048,
-    hop: int = 512,
-    token: CancellationToken | None = None,
-) -> np.ndarray:
-    cancel = token or CancellationToken()
-    mix = np.asarray(song, dtype=np.float64)
-    accompaniment = np.asarray(reference, dtype=np.float64)
-    if mix.ndim != 1 or accompaniment.ndim != 1 or not mix.size or not accompaniment.size:
-        return np.empty(0, dtype=np.float64)
-    length = min(mix.size, accompaniment.size)
-    strength = float(np.clip(strength, 0.0, 1.0))
-    if strength == 0:
-        return mix[:length].copy()
-    if algorithm == Algorithm.REFERENCE_CENTER:
-        cancel.raise_if_cancelled()
-        matrix = _fit_direct_matrix(mix[None, :length], accompaniment[None, :length])
-        return mix[:length] - strength * matrix[0, 0] * accompaniment[:length]
-    y = stft(mix[:length], n_fft, hop)
-    x = stft(accompaniment[:length], n_fft, hop)
-    frames = min(y.shape[0], x.shape[0])
-    y, x = y[:frames], x[:frames]
-    cancel.raise_if_cancelled()
-    y_mag, x_mag = np.abs(y), np.abs(x)
-    adjusted = strength * x_mag
-    epsilon = 1e-10
-    if algorithm == Algorithm.SOFT_MASK:
-        mask = y_mag**2 / (y_mag**2 + adjusted**2 + epsilon)
-        output_spec = y * mask
-    elif algorithm == Algorithm.SPECTRAL_SUBTRACTION:
-        magnitude = np.maximum(0.0, y_mag - adjusted)
-        output_spec = magnitude * np.exp(1j * np.angle(y))
-    elif algorithm == Algorithm.WIENER_FILTER:
-        vocal_power = np.maximum(0.0, y_mag**2 - adjusted**2)
-        mask = np.maximum(vocal_power / (vocal_power + adjusted**2 + epsilon), 0.01)
-        output_spec = y * mask
-    elif algorithm == Algorithm.FREQUENCY_WEIGHTED:
-        frequencies = fft_frequencies(sample_rate, n_fft)
-        weight = np.where((frequencies >= 80) & (frequencies <= 1100), 1.5, 1.0)
-        weighted = y_mag * weight[None, :]
-        mask = weighted**2 / (weighted**2 + adjusted**2 + epsilon)
-        output_spec = y * mask
-    elif algorithm == Algorithm.BINARY_MASK:
-        mask = gaussian_filter((y_mag > 1.2 * adjusted).astype(np.float64), 0.5, mode="reflect")
-        output_spec = y * mask
-    elif algorithm == Algorithm.PHASE_SENSITIVE:
-        difference = np.abs(np.angle(y) - np.angle(x))
-        difference = np.minimum(difference, 2 * np.pi - difference) / np.pi
-        amplitude = y_mag**2 / (y_mag**2 + adjusted**2 + epsilon)
-        output_spec = y * np.clip(amplitude * (0.7 + 0.3 * difference), 0.0, 1.0)
-    else:  # pragma: no cover - protected by Algorithm
-        raise ValueError(f"unsupported algorithm: {algorithm}")
-    cancel.raise_if_cancelled()
-    return istft(output_spec, hop, length)
-
-
-def _process_block(
-    song: np.ndarray,
-    reference: np.ndarray,
-    sample_rate: int,
-    strength: float,
-    algorithm: Algorithm,
-    sigma: float,
-    center_extraction: bool,
-    weak_vocal_protection: bool,
-    token: CancellationToken,
-) -> np.ndarray:
-    if algorithm == Algorithm.REFERENCE_CENTER and song.shape[0] >= 2 and reference.shape[0] >= 2:
-        return _reference_center_stereo(
-            song[:2],
-            reference[:2],
-            sample_rate,
-            strength,
-            sigma,
-            center_extraction,
-            weak_vocal_protection,
-            token,
-        )
-    return np.stack(
-        [
-            process_channel(
-                song[channel],
-                reference[min(channel, reference.shape[0] - 1)],
-                sample_rate,
-                strength,
-                algorithm,
-                sigma,
-                token=token,
-            )
-            for channel in range(song.shape[0])
-        ]
-    )
-
-
 def process_audio(
     song: np.ndarray,
     reference: np.ndarray,
     sample_rate: int,
     strength: float,
-    algorithm: Algorithm,
     sigma: float,
     token: CancellationToken | None = None,
     output: np.ndarray | None = None,
@@ -358,12 +255,11 @@ def process_audio(
     for index, start in enumerate(starts):
         cancel.raise_if_cancelled()
         end = min(start + block, length)
-        processed = _process_block(
+        processed = _cancel_reference(
             mix[:, start:end],
             accompaniment[:, start:end],
             sample_rate,
             strength,
-            algorithm,
             sigma,
             center_extraction,
             weak_vocal_protection,
@@ -388,12 +284,9 @@ def process_audio(
     for start in range(0, length, cleanup_block):
         view = result[:, start : start + cleanup_block]
         np.nan_to_num(view, copy=False)
-        if algorithm == Algorithm.REFERENCE_CENTER:
-            peak = max(peak, float(np.max(np.abs(view), initial=0.0)))
-        else:
-            np.clip(view, -1.0, 1.0, out=view)
+        peak = max(peak, float(np.max(np.abs(view), initial=0.0)))
     peak_ceiling = 10 ** (-1.0 / 20.0)
-    if algorithm == Algorithm.REFERENCE_CENTER and peak > peak_ceiling:
+    if peak > peak_ceiling:
         scale = peak_ceiling / peak
         for start in range(0, length, cleanup_block):
             result[:, start : start + cleanup_block] *= scale
