@@ -24,25 +24,23 @@ AI 人声提取。
 
 ## 安装
 
-需要 Python 3.11 或更高版本。建议在独立虚拟环境中安装，避免与其他导出
-`qfluentwidgets` 的 Qt Fluent 组件混用。
+需要 [uv](https://docs.astral.sh/uv/)；项目会按 `.python-version` 自动选择 Python，
+并在仓库内管理隔离环境。不要向该环境混装其他导出 `qfluentwidgets` 的 Qt Fluent 组件。
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -e . -i https://pypi.org/simple/
+uv sync --locked
 ```
 
 启动图形界面：
 
 ```bash
-audio-station
+uv run --locked audio-station
 ```
 
 也可以从源码入口启动：
 
 ```bash
-python -m entrypoints
+uv run --locked python -m entrypoints
 ```
 
 ## 图形界面使用方法
@@ -83,22 +81,22 @@ python -m entrypoints
 查看版本和帮助：
 
 ```bash
-audio-station --version
-audio-station --help
-audio-station mr --help
-audio-station ai --help
+uv run --locked audio-station --version
+uv run --locked audio-station --help
+uv run --locked audio-station mr --help
+uv run --locked audio-station ai --help
 ```
 
 使用默认参数进行参考对消：
 
 ```bash
-audio-station mr "现场录音.wav" "参考伴奏.wav" "现场人声.wav"
+uv run --locked audio-station mr "现场录音.wav" "参考伴奏.wav" "现场人声.wav"
 ```
 
 指定强度、增益窗口并开启中置处理：
 
 ```bash
-audio-station mr "现场录音.wav" "参考伴奏.wav" "现场人声.wav" \
+uv run --locked audio-station mr "现场录音.wav" "参考伴奏.wav" "现场人声.wav" \
   --strength 75 --sigma 8 --align \
   --center-extraction --weak-vocal-protection
 ```
@@ -117,7 +115,7 @@ audio-station mr "现场录音.wav" "参考伴奏.wav" "现场人声.wav" \
 AI 分离示例：
 
 ```bash
-audio-station ai "歌曲.wav" --output-dir "输出目录" --model mdxnet_1
+uv run --locked audio-station ai "歌曲.wav" --output-dir "输出目录" --model mdxnet_1
 ```
 
 可用模型为 `mdxnet_1`、`mdxnet_main`、`kim_vocal` 和 `kuielab_b`。可用

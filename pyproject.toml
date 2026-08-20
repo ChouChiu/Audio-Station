@@ -20,10 +20,8 @@ dependencies = [
   "soxr>=0.5,<1",
 ]
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
-  "build>=1.2,<2",
-  "hatchling>=1.27",
   "pytest>=8.3,<10",
   "pytest-qt>=4.4,<5",
   "ruff>=0.12,<1",

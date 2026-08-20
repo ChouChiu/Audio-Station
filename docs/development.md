@@ -2,19 +2,20 @@
 
 ## 开发环境
 
-项目需要 Python 3.11 或更高版本，使用 pip 和独立虚拟环境：
+项目使用 uv 管理 Python、隔离环境和锁文件。安装 uv 后，在仓库根目录同步锁定的运行时与默认开发依赖：
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -e '.[dev]'
+uv sync --locked
 ```
 
 构建 Linux 独立程序时再安装部署依赖：
 
 ```bash
-python -m pip install -e '.[deploy]'
+uv sync --locked --group deploy
 ```
+
+修改依赖时使用 `uv add <包名>`、`uv add --dev <包名>` 或
+`uv add --group deploy <包名>`，并提交同步更新的 `pyproject.toml` 与 `uv.lock`。
 
 不要同时安装其他导出 `qfluentwidgets` 的 PyQt 或 PySide Fluent 组件。项目指定的是
 `PySide6-Fluent-Widgets[full]`。
@@ -64,17 +65,17 @@ src/resources/i18n/ko_kr.json
 Qt 测试必须使用离屏平台：
 
 ```bash
-.venv/bin/ruff check src tests
-.venv/bin/ruff format --check src tests
-QT_QPA_PLATFORM=offscreen .venv/bin/pytest
-QT_QPA_PLATFORM=offscreen .venv/bin/audio-station --selftest
-python -m build
+uv run --locked ruff check src tests
+uv run --locked ruff format --check src tests
+QT_QPA_PLATFORM=offscreen uv run --locked pytest
+QT_QPA_PLATFORM=offscreen uv run --locked audio-station --selftest
+uv build
 ```
 
 慢速基准需要显式开启：
 
 ```bash
-QT_QPA_PLATFORM=offscreen .venv/bin/pytest tests/benchmarks --runslow
+QT_QPA_PLATFORM=offscreen uv run --locked pytest tests/benchmarks --runslow
 ```
 
 当前慢速门禁使用 15 分钟、44.1 kHz 双声道音频检查参考对消的输出长度、接缝和峰值常驻内存，内存上限为
@@ -92,15 +93,15 @@ QT_QPA_PLATFORM=offscreen .venv/bin/pytest tests/benchmarks --runslow
 ## Python 包构建
 
 ```bash
-source .venv/bin/activate
-python -m build
+uv build
 ```
 
-产物写入 `dist/`。ONNX 权重位于忽略列表，不会进入 wheel 或源码包。构建后应在仓库外的新环境安装 wheel，并验证：
+产物写入 `dist/`。ONNX 权重位于忽略列表，不会进入 wheel 或源码包。构建后应通过 uv 的临时隔离环境安装 wheel 并验证（路径中的版本号按实际产物调整）：
 
 ```bash
-audio-station --version
-QT_QPA_PLATFORM=offscreen audio-station --selftest
+uvx --from ./dist/audio_station-1.0.0-py3-none-any.whl audio-station --version
+QT_QPA_PLATFORM=offscreen uvx --from ./dist/audio_station-1.0.0-py3-none-any.whl \
+  audio-station --selftest
 ```
 
 ## Linux 独立程序
@@ -108,9 +109,8 @@ QT_QPA_PLATFORM=offscreen audio-station --selftest
 项目通过 Qt 官方 `pyside6-deploy` 封装 Nuitka，固定使用 `standalone` 目录模式：
 
 ```bash
-source .venv/bin/activate
-python -m pip install -e '.[deploy]'
-pyside6-deploy -c pysidedeploy.spec
+uv sync --locked --group deploy
+uv run --locked --group deploy pyside6-deploy -c pysidedeploy.spec
 ```
 
 独立产物写入 `dist/`，包含 Python、Qt、Fluent Widgets、SciPy、SoundFile、soxr 和 ONNX Runtime，但不包含模型权重。发布前除自动化测试外，还应实际启动独立程序，检查页面导航、模型查找、音频解码、任务取消和输出试听。

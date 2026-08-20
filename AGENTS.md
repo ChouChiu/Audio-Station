@@ -52,25 +52,25 @@ Invariants enforced by `tests/test_architecture.py`: `shared` must never import 
 ## Development Commands
 
 ```bash
-python3 -m venv .venv && source .venv/bin/activate
-python -m pip install -e '.[dev]'
+uv sync --locked
 
 # run
-audio-station                      # GUI
-python -m entrypoints              # GUI (same)
-audio-station mr <song> <acc> <out.wav> --strength 75 --sigma 8 --align --lang zh_cn
-audio-station ai <song> [--output-dir <dir>] [--model mdxnet_1] [--models-dir <dir>]
-audio-station --selftest           # self-test smoke (offscreen-safe)
+uv run --locked audio-station                      # GUI
+uv run --locked python -m entrypoints              # GUI (same)
+uv run --locked audio-station mr <song> <acc> <out.wav> --strength 75 --sigma 8 --align --lang zh_cn
+uv run --locked audio-station ai <song> [--output-dir <dir>] [--model mdxnet_1] [--models-dir <dir>]
+uv run --locked audio-station --selftest           # self-test smoke (offscreen-safe)
 
 # checks (no lint/test without offscreen Qt platform)
-.venv/bin/ruff check src tests
-.venv/bin/ruff format --check src tests
-QT_QPA_PLATFORM=offscreen .venv/bin/pytest
-QT_QPA_PLATFORM=offscreen .venv/bin/pytest tests/benchmarks --runslow   # 15-min memory/quality gate
-python -m build                    # sdist+wheel
+uv run --locked ruff check src tests
+uv run --locked ruff format --check src tests
+QT_QPA_PLATFORM=offscreen uv run --locked pytest
+QT_QPA_PLATFORM=offscreen uv run --locked pytest tests/benchmarks --runslow   # 15-min memory/quality gate
+uv build                           # sdist+wheel
 
 # Linux standalone (Nuitka via pyside6-deploy; output dist/)
-python -m pip install -e '.[deploy]' && pyside6-deploy -c pysidedeploy.spec
+uv sync --locked --group deploy
+uv run --locked --group deploy pyside6-deploy -c pysidedeploy.spec
 ```
 
 Language keys: `zh_cn`, `ja_jp`, `ko_kr`.
@@ -108,7 +108,7 @@ Language keys: `zh_cn`, `ja_jp`, `ko_kr`.
 
 ## Runtime/Tooling Preferences
 
-- **Python ≥ 3.11** in a dedicated venv. Package manager: pip (editable `.[dev]`); no poetry/uv lockfile.
+- **Python ≥ 3.11**, pinned to 3.14 for development via `.python-version`. Package/environment manager: uv; commit `uv.lock`. The `dev` dependency group is synced by default and `deploy` is opt-in.
 - **UI stack**: PySide6 ≥6.8 + `PySide6-Fluent-Widgets[full]` (vendored `qfluentwidgets`; never mix with other Fluent widget packages). Qt is mandatory for audio fallback decode (`QAudioDecoder`) — CLI tests still need `QT_QPA_PLATFORM=offscreen`.
 - **DSP deps**: numpy ≥2, scipy, soundfile, soxr; neural: onnxruntime (CPU). All pinned to bounded ranges in `pyproject.toml`.
 - **Lint/format**: ruff only (`line-length = 100`, rules E/F/I/UP/B/SIM/RUF, E501 ignored). Format = `ruff format`; there is no separate black/isort.
@@ -116,7 +116,7 @@ Language keys: `zh_cn`, `ja_jp`, `ko_kr`.
 
 ## Testing & QA
 
-- **Framework**: pytest ≥8.3 + pytest-qt ≥4.4. Run: `QT_QPA_PLATFORM=offscreen .venv/bin/pytest` (offscreen mandatory; conftest sets it and adds `--runslow`, auto-skipping `@pytest.mark.slow` tests otherwise). Marker `model` is declared but currently unused; `--runslow` runs the 15-minute, 44.1 kHz stereo reference-cancellation benchmark (`tests/benchmarks/test_long_audio.py`) asserting seam smoothness and peak RSS ≤ 1.5 GiB.
+- **Framework**: pytest ≥8.3 + pytest-qt ≥4.4. Run: `QT_QPA_PLATFORM=offscreen uv run --locked pytest` (offscreen mandatory; conftest sets it and adds `--runslow`, auto-skipping `@pytest.mark.slow` tests otherwise). Marker `model` is declared but currently unused; `--runslow` runs the 15-minute, 44.1 kHz stereo reference-cancellation benchmark (`tests/benchmarks/test_long_audio.py`) asserting seam smoothness and peak RSS ≤ 1.5 GiB.
 - **Layout**: `tests/` mirrors `src/` path-for-path. Per-area coverage: audio IO/resample/atomic-write (`tests/shared/test_audio.py`), STFT round-trip (`test_spectral.py`), i18n key parity (`test_i18n.py`), log format (`test_logging.py`), direct reference cancellation + alignment/MIMO (`tests/features/reference_removal/test_dsp.py`), drift/focus/jitter regressions (`test_dsp_regression.py`), finder similarity (`test_finder.py`), end-to-end reference job + AudioStats + same-input rejection (`test_processing.py`), neural chunked overlap-add identity (`test_neural.py`), CLI option handling (`tests/entrypoints/test_cli.py`), GUI navigation/theme/combos/stats via pytest-qt (`tests/app/test_gui.py`).
 - **Architecture gate**: `tests/test_architecture.py` parses ASTs — any `shared → app/features` or feature↔feature import fails the suite.
-- **Expectations**: synthetic DSP metrics are regression evidence only — they do not claim real-music quality (stated in README). Run `audio-station --selftest` for a quick pipeline smoke check before committing DSP changes.
+- **Expectations**: synthetic DSP metrics are regression evidence only — they do not claim real-music quality (stated in README). Run `uv run --locked audio-station --selftest` for a quick pipeline smoke check before committing DSP changes.
