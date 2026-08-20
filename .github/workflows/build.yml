@@ -1,0 +1,247 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+
+env:
+  QT_QPA_PLATFORM: offscreen
+  UV_NO_PROGRESS: "1"
+  UV_PYTHON_PREFERENCE: only-managed
+
+jobs:
+  quality:
+    name: Quality gates
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Setup uv
+        id: setup-uv
+        uses: astral-sh/setup-uv@v10
+        with:
+          version: "0.12.2"
+          python-version: "3.14"
+          enable-cache: true
+          cache-python: true
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
+
+      - name: Prepare logs
+        run: mkdir -p logs
+
+      - name: Sync dependencies
+        run: uv sync --locked --group deploy 2>&1 | tee logs/sync.log
+
+      - name: Lint code
+        id: lint
+        run: uv run --locked ruff check src tests 2>&1 | tee logs/lint.log
+
+      - name: Check formatting
+        id: format
+        run: uv run --locked ruff format --check src tests 2>&1 | tee logs/format.log
+
+      - name: Run tests
+        id: tests
+        run: >-
+          uv run --locked pytest --junitxml=test-results/pytest.xml
+          2>&1 | tee logs/tests.log
+
+      - name: Run self-test
+        id: self-test
+        run: uv run --locked audio-station --selftest 2>&1 | tee logs/self-test.log
+
+      - name: Upload test results
+        id: test-artifact
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results-${{ github.run_id }}
+          path: test-results/pytest.xml
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload logs
+        id: logs-artifact
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: quality-logs-${{ github.run_id }}
+          path: logs/*.log
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Write summary
+        if: ${{ always() }}
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<'MARKDOWN'
+          ## Quality summary
+
+          | Check | Result |
+          |---|---|
+          | Job | `${{ job.status }}` |
+          | Ruff | `${{ steps.lint.outcome }}` |
+          | Format | `${{ steps.format.outcome }}` |
+          | Tests | `${{ steps.tests.outcome }}` |
+          | Self-test | `${{ steps.self-test.outcome }}` |
+          | uv cache | `${{ steps.setup-uv.outputs.cache-hit }}` |
+
+          - Test report: ${{ steps.test-artifact.outputs.artifact-url || 'Not uploaded' }}
+          - Quality logs: ${{ steps.logs-artifact.outputs.artifact-url || 'Not uploaded' }}
+          MARKDOWN
+
+  build:
+    name: Build packages
+    needs: quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Setup uv
+        id: setup-uv
+        uses: astral-sh/setup-uv@v10
+        with:
+          version: "0.12.2"
+          python-version: "3.14"
+          enable-cache: true
+          cache-python: true
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
+
+      - name: Prepare logs
+        run: mkdir -p logs
+
+      - name: Restore compiler cache
+        id: compiler-cache
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ccache
+          key: >-
+            nuitka-${{ runner.os }}-py3.14-${{ hashFiles('uv.lock', 'pysidedeploy.spec',
+            'src/**/*.py', 'deployment/**/*.py') }}
+          restore-keys: |
+            nuitka-${{ runner.os }}-py3.14-
+
+      - name: Configure compiler cache
+        run: |
+          ccache --max-size=2G 2>&1 | tee logs/cache-config.log
+          ccache --zero-stats 2>&1 | tee -a logs/cache-config.log
+
+      - name: Sync dependencies
+        run: uv sync --locked --no-dev --group deploy 2>&1 | tee logs/sync.log
+
+      - name: Build distributions
+        id: distributions
+        run: uv build 2>&1 | tee logs/distributions.log
+
+      - name: Verify wheel
+        id: wheel
+        run: |
+          uvx --from ./dist/audio_station-*.whl audio-station --version 2>&1 | tee logs/wheel.log
+          uvx --from ./dist/audio_station-*.whl audio-station --selftest 2>&1 | tee -a logs/wheel.log
+
+      - name: Build standalone
+        id: standalone-build
+        run: >-
+          uv run --locked --no-dev --group deploy
+          pyside6-deploy -c pysidedeploy.spec --force
+          2>&1 | tee logs/standalone-build.log
+
+      - name: Show cache stats
+        if: ${{ !cancelled() }}
+        run: ccache --show-stats 2>&1 | tee logs/cache-stats.log
+
+      - name: Verify standalone
+        id: standalone
+        run: |
+          test -x "dist/Audio Station.dist/main.bin" 2>&1 | tee logs/standalone.log
+          "dist/Audio Station.dist/main.bin" --selftest 2>&1 | tee -a logs/standalone.log
+          tar -C dist -czf dist/audio-station-linux-x86_64.tar.gz "Audio Station.dist" \
+            2>&1 | tee -a logs/standalone.log
+
+      - name: Generate checksums
+        run: |
+          sha256sum dist/audio_station-*.whl dist/audio_station-*.tar.gz \
+            | tee dist/SHA256SUMS-python logs/checksums.log
+          sha256sum dist/audio-station-linux-x86_64.tar.gz \
+            | tee dist/SHA256SUMS-linux | tee -a logs/checksums.log
+
+      - name: Upload distributions
+        id: distributions-artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: python-distributions-${{ github.run_id }}
+          path: |
+            dist/audio_station-*.whl
+            dist/audio_station-*.tar.gz
+            dist/SHA256SUMS-python
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+      - name: Upload standalone
+        id: standalone-artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: linux-standalone-${{ github.run_id }}
+          path: |
+            dist/audio-station-linux-x86_64.tar.gz
+            dist/SHA256SUMS-linux
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+      - name: Upload logs
+        id: logs-artifact
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-logs-${{ github.run_id }}
+          path: logs/*.log
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Write summary
+        if: ${{ always() }}
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<'MARKDOWN'
+          ## Build summary
+
+          | Item | Result |
+          |---|---|
+          | Job | `${{ job.status }}` |
+          | Distributions | `${{ steps.distributions.outcome }}` |
+          | Wheel verification | `${{ steps.wheel.outcome }}` |
+          | Standalone build | `${{ steps.standalone-build.outcome }}` |
+          | Standalone verification | `${{ steps.standalone.outcome }}` |
+          | uv cache | `${{ steps.setup-uv.outputs.cache-hit }}` |
+          | Compiler cache | `${{ steps.compiler-cache.outputs.cache-hit }}` |
+
+          ### Artifacts
+
+          - Python distributions: ${{ steps.distributions-artifact.outputs.artifact-url || 'Not uploaded' }}
+          - Linux standalone: ${{ steps.standalone-artifact.outputs.artifact-url || 'Not uploaded' }}
+          - Build logs: ${{ steps.logs-artifact.outputs.artifact-url || 'Not uploaded' }}
+          MARKDOWN
