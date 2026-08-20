@@ -16,6 +16,20 @@ $$
 
 最终写出 `<歌曲名>_vocal.wav` 与 `<歌曲名>_background.wav` 两个 16-bit 双声道 WAV。
 
+```mermaid
+flowchart LR
+    input["输入音频"] --> stereo["双声道化<br/>重采样到 44.1 kHz"]
+    stereo --> model{"已找到模型？"}
+    model -->|否| download["下载临时文件<br/>校验大小与 SHA-256"]
+    model -->|是| infer["MDX-Net 分块推理"]
+    download --> infer
+    infer --> vocal["预测人声"]
+    stereo --> subtract["混音减预测人声"]
+    vocal --> subtract
+    vocal --> vocalout["人声 WAV"]
+    subtract --> background["背景 WAV"]
+```
+
 ## 模型目录与下载
 
 模型按以下顺序查找：

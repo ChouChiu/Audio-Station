@@ -20,8 +20,12 @@ src/entrypoints/                 程序入口，只负责启动 GUI 或解析 CL
 
 依赖方向为：
 
-```text
-程序入口 → 应用编排 → 功能模块 → 公共模块
+```mermaid
+flowchart LR
+    entry["程序入口<br/>src/entrypoints"] --> app["应用编排<br/>src/app"]
+    app --> feature["功能模块<br/>src/features"]
+    app --> shared["公共模块<br/>src/shared"]
+    feature --> shared
 ```
 
 `tests/test_architecture.py` 通过抽象语法树检查以下边界：
@@ -35,18 +39,17 @@ src/entrypoints/                 程序入口，只负责启动 GUI 或解析 CL
 每个页面只发出开始和取消信号，不直接控制线程。`MainWindow` 根据页面参数建立不可变任务对象，再创建
 `QThread` 和 `ProcessingWorker`。工作线程运行处理函数，并发出进度、成功、失败、取消和结束信号。
 
-```text
-页面参数
-   ↓
-任务数据类
-   ↓
-MainWindow ──创建──> QThread + ProcessingWorker
-                           ↓
-                    run_reference_job
-                    run_full_stage_job
-                    run_neural_job
-                           ↓
-                    ProcessingResult
+```mermaid
+flowchart LR
+    page["GUI 页面"] -->|参数| job["不可变任务对象"]
+    job --> window["MainWindow"]
+    window -->|创建| worker["QThread + ProcessingWorker"]
+    worker --> pipeline["处理函数"]
+    cli["CLI"] -->|同步调用| pipeline
+    pipeline --> result["处理结果"]
+    result -->|信号| page
+    cancel["取消请求"] -.-> token["CancellationToken"]
+    token -.-> pipeline
 ```
 
 CLI 创建相同的任务数据类并同步调用同一处理函数。`SIGINT` 会设置 `CancellationToken`；各个解码、重采样、分析、推理和写出循环定期调用 `raise_if_cancelled()`，因此取消是协作式的。
@@ -65,6 +68,17 @@ CLI 创建相同的任务数据类并同步调用同一处理函数。`SIGINT` �
 WAV 写出先生成同目录临时文件，成功后使用 `os.replace` 原子替换目标。取消或异常不会留下半写入的正式输出。
 
 ## 三条处理管线
+
+```mermaid
+flowchart TB
+    input["音频输入"] --> choice{"工作流"}
+    choice -->|单曲参考对消| mr["对齐参考音源<br/>立体声直接对消"]
+    choice -->|完整舞台| stage["多音源匹配<br/>按时间线分段对消"]
+    choice -->|AI 人声分离| ai["模型分块推理<br/>计算人声与背景"]
+    mr --> mrout["24-bit 人声 WAV"]
+    stage --> stageout["24-bit 整场 WAV"]
+    ai --> aiout["两个 16-bit WAV"]
+```
 
 ### 单曲参考对消
 

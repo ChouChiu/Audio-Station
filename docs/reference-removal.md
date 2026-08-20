@@ -21,10 +21,23 @@ $$
 
 ## 总体流程
 
-```text
-读取 → 双声道化 → 采样率统一 → 粗对齐 → 局部漂移跟踪
-→ Lanczos 重采样式时间扭曲 → 分块估计传递矩阵 → 一次直接相减
-→ 可选中置处理 → 峰值整理 → 写出
+```mermaid
+flowchart LR
+    mix["待处理录音"] --> read["读取并双声道化"]
+    ref["参考伴奏"] --> read
+    read --> rate["统一采样率"]
+    rate --> enabled{"自动对齐？"}
+    enabled -->|是| coarse["谱通量 / GCC-PHAT<br/>粗对齐"]
+    coarse --> drift["局部漂移跟踪"]
+    drift --> warp["Lanczos 时间扭曲"]
+    enabled -->|否| cancel["分块估计 2×2 传递矩阵"]
+    warp --> cancel
+    cancel --> subtract["一次直接相减"]
+    subtract --> center{"开启中置处理？"}
+    center -->|是| focus["中置聚焦<br/>可选弱人声保护"]
+    center -->|否| protect["峰值保护"]
+    focus --> protect
+    protect --> output["24-bit WAV"]
 ```
 
 ## 时间对齐

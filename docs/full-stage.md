@@ -6,6 +6,26 @@
 
 自动分析不会直接修改音频。它先生成可编辑时间线，用户确认后才渲染；未匹配区间始终从原始整场录音复制。
 
+```mermaid
+flowchart TB
+    stage["完整舞台录音"] --> feature["提取多频带起音特征"]
+    sources["多首正式音源"] --> feature
+    feature --> match["归一化互相关与候选聚类"]
+    match --> song["完整歌曲"]
+    match --> fragment["重复短片段"]
+    match --> unmatched["未匹配区间"]
+    song --> timeline["可编辑时间线"]
+    fragment --> timeline
+    unmatched --> timeline
+    timeline --> review["人工检查与修正"]
+    review --> render{"条目是否启用且已匹配？"}
+    render -->|是| cancel["局部对齐与参考对消"]
+    render -->|否| original["保留整场原音"]
+    cancel --> blend["最长 50 ms 边界淡化"]
+    original --> output["合成整场输出"]
+    blend --> output
+```
+
 ## 特征提取
 
 整场录音和每个音源会先转成 4 kHz 单声道代理信号，再以约 40 ms 的帧步长计算短时傅里叶变换。幅度经
