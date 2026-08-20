@@ -4,13 +4,16 @@ import logging
 import math
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QUrl, Signal
+from PySide6.QtCore import QPoint, Qt, QUrl, Signal
+from PySide6.QtGui import QMouseEvent
 from PySide6.QtMultimedia import QAudioOutput, QMediaDevices, QMediaPlayer
 from PySide6.QtWidgets import (
     QFileDialog,
     QGridLayout,
     QHBoxLayout,
     QSizePolicy,
+    QStyle,
+    QStyleOptionSlider,
     QVBoxLayout,
     QWidget,
 )
@@ -33,6 +36,66 @@ from shared.i18n import tr
 from shared.ui import FormCard, PageScrollArea, SmoothComboBox
 
 logger = logging.getLogger(__name__)
+
+
+class SeekSlider(Slider):
+    """Slider that seeks directly when the user clicks its groove."""
+
+    seek_requested = Signal(int)
+
+    def _value_at(self, point: QPoint) -> int:
+        option = QStyleOptionSlider()
+        self.initStyleOption(option)
+        groove = self.style().subControlRect(
+            QStyle.ComplexControl.CC_Slider,
+            option,
+            QStyle.SubControl.SC_SliderGroove,
+            self,
+        )
+        handle = self.style().subControlRect(
+            QStyle.ComplexControl.CC_Slider,
+            option,
+            QStyle.SubControl.SC_SliderHandle,
+            self,
+        )
+        if self.orientation() == Qt.Orientation.Horizontal:
+            slider_length = handle.width()
+            slider_minimum = groove.left()
+            slider_maximum = groove.right() - slider_length + 1
+            position = point.x() - slider_length // 2
+        else:
+            slider_length = handle.height()
+            slider_minimum = groove.top()
+            slider_maximum = groove.bottom() - slider_length + 1
+            position = point.y() - slider_length // 2
+        return QStyle.sliderValueFromPosition(
+            self.minimum(),
+            self.maximum(),
+            position - slider_minimum,
+            max(slider_maximum - slider_minimum, 0),
+            option.upsideDown,
+        )
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() != Qt.MouseButton.LeftButton:
+            super().mousePressEvent(event)
+            return
+        option = QStyleOptionSlider()
+        self.initStyleOption(option)
+        handle = self.style().subControlRect(
+            QStyle.ComplexControl.CC_Slider,
+            option,
+            QStyle.SubControl.SC_SliderHandle,
+            self,
+        )
+        point = event.position().toPoint()
+        if handle.contains(point):
+            super().mousePressEvent(event)
+            return
+        value = self._value_at(point)
+        self.setValue(value)
+        self.seek_requested.emit(value)
+        event.accept()
 
 
 class MrPage(PageScrollArea):
@@ -102,7 +165,7 @@ class MrPage(PageScrollArea):
         self.preview_status = BodyLabel()
         self.preview_status.setMinimumWidth(0)
         self.preview_status.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        self.preview_seek = Slider(Qt.Orientation.Horizontal)
+        self.preview_seek = SeekSlider(Qt.Orientation.Horizontal)
         self.preview_seek.setRange(0, 1)
         self.preview_seek.setEnabled(False)
         self.preview_time = BodyLabel("00:00 / 00:00")
@@ -190,6 +253,7 @@ class MrPage(PageScrollArea):
         self.preview_seek.sliderPressed.connect(lambda: setattr(self, "_seeking", True))
         self.preview_seek.sliderReleased.connect(self._seek_preview)
         self.preview_seek.sliderMoved.connect(self._preview_slider_moved)
+        self.preview_seek.seek_requested.connect(self._seek_preview_to)
         self.player.positionChanged.connect(self._preview_position_changed)
         self.player.durationChanged.connect(self._preview_duration_changed)
         self.player.playbackStateChanged.connect(lambda _state: self._update_preview_button())
@@ -391,8 +455,12 @@ class MrPage(PageScrollArea):
         self._update_preview_button()
 
     def _seek_preview(self) -> None:
-        self.player.setPosition(self.preview_seek.value())
+        self._seek_preview_to(self.preview_seek.value())
         self._seeking = False
+
+    def _seek_preview_to(self, position: int) -> None:
+        self.player.setPosition(position)
+        self._preview_slider_moved(position)
 
     def _preview_slider_moved(self, position: int) -> None:
         duration = max(self.player.duration(), self.preview_seek.maximum())

@@ -272,6 +272,31 @@ def test_preview_tracks_audio_output_changes(qtbot, monkeypatch):
     assert calls == [page, page]
 
 
+def test_preview_seek_groove_click_jumps_to_clicked_position(qtbot):
+    page = MrPage()
+    qtbot.addWidget(page)
+    page.preview_seek.setRange(0, 10_000)
+    page.preview_seek.setValue(0)
+    page.preview_seek.setEnabled(True)
+    page.preview_seek.setFixedWidth(400)
+    page.show()
+    qtbot.waitExposed(page)
+    QApplication.processEvents()
+    requested: list[int] = []
+    page.preview_seek.seek_requested.connect(requested.append)
+
+    qtbot.mouseClick(
+        page.preview_seek,
+        Qt.MouseButton.LeftButton,
+        pos=QPoint(3 * page.preview_seek.width() // 4, page.preview_seek.height() // 2),
+    )
+
+    assert len(requested) == 1
+    assert requested[0] == page.preview_seek.value()
+    assert requested[0] == pytest.approx(7_500, abs=600)
+    assert page.preview_time.text() == f"{page._clock(requested[0])} / 00:10"
+
+
 def test_long_output_path_does_not_expand_page_width(qtbot, tmp_path: Path):
     page = MrPage()
     qtbot.addWidget(page)
