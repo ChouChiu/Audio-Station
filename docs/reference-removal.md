@@ -50,9 +50,11 @@ flowchart LR
 GCC-PHAT 对互功率谱只保留相位：
 
 $$
-R_{\mathrm{PHAT}}(\tau)=\mathcal{F}^{-1}\left\{
-\frac{Y(f)X^*(f)}{|Y(f)X^*(f)|+\varepsilon}
-\right\}
+R_{\mathrm{PHAT}}(\tau)
+=\mathcal{F}^{-1}\!\left(
+\frac{Y(f)\,\overline{X(f)}}
+{\lvert Y(f)\,\overline{X(f)}\rvert+\varepsilon}
+\right)
 $$
 
 相关峰对应粗略时延。默认先在较小范围搜索，峰落在边界附近时再扩大到最多约 20 秒，降低无意义远距离匹配的概率。
