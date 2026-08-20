@@ -114,3 +114,21 @@ uv run --locked --group deploy pyside6-deploy -c pysidedeploy.spec
 ```
 
 独立产物写入 `dist/`，包含 Python、Qt、Fluent Widgets、SciPy、SoundFile、soxr 和 ONNX Runtime，但不包含模型权重。发布前除自动化测试外，还应实际启动独立程序，检查页面导航、模型查找、音频解码、任务取消和输出试听。
+
+## 持续集成
+
+`.github/workflows/build.yml` 在 `main` 分支、`v*` 标签、Pull Request 和手动触发时运行。
+质量门禁通过后，工作流构建并隔离验证 wheel、sdist 与 Linux standalone，再上传：
+
+- pytest JUnit XML；
+- 质量门禁与构建命令的独立日志；
+- wheel、sdist 及 SHA-256 校验文件；
+- 保留可执行权限的 Linux standalone 压缩包及 SHA-256 校验文件。
+
+质量和构建任务都会生成 GitHub Job Summary，列出各门禁结果、缓存命中状态、日志和工件下载链接；
+即使前置步骤失败，也会尽可能写入已知结果。
+
+工件保留 14 天。uv 依赖缓存由 `uv.lock` 和 `pyproject.toml` 的内容共同失效，
+同时缓存 uv 管理的 Python 3.14；不缓存 `.venv` 本身。Linux standalone 额外使用
+ccache，根据锁文件、部署规格和 Python 源码失效，上限为 2 GiB。同一分支有新提交时会取消旧任务，
+标签构建不会被取消。
