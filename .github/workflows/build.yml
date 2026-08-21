@@ -54,7 +54,7 @@ jobs:
         run: |
           {
             sudo apt-get update
-            sudo apt-get install --yes --no-install-recommends libegl1
+            sudo apt-get install --yes --no-install-recommends libegl1 libpulse0
           } 2>&1 | tee logs/system-deps.log
 
       - name: Sync dependencies
@@ -158,7 +158,7 @@ jobs:
         run: |
           {
             sudo apt-get update
-            sudo apt-get install --yes --no-install-recommends libegl1
+            sudo apt-get install --yes --no-install-recommends libegl1 libpulse0
           } 2>&1 | tee logs/system-deps.log
 
       - name: Restore compiler cache
