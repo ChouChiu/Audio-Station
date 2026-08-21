@@ -78,6 +78,7 @@ class FullStagePage(PageScrollArea):
         self.layout.addWidget(self.sources_card)
 
         self.parameters = FormCard()
+        self.algorithm_label, self.algorithm = BodyLabel(), SmoothComboBox()
         self.strength_label, self.strength_value = BodyLabel(), BodyLabel("75%")
         self.strength = Slider(Qt.Orientation.Horizontal)
         self.strength.setRange(0, 100)
@@ -96,6 +97,7 @@ class FullStagePage(PageScrollArea):
         )
         self.include_fragments_label, self.include_fragments = BodyLabel(), SwitchButton()
         self.include_fragments.setChecked(True)
+        self.parameters.add_row(self.algorithm_label, self.algorithm)
         self.parameters.add_row(self.strength_label, self.strength, self.strength_value)
         self.parameters.add_row(self.sigma_label, self.sigma)
         self.parameters.add_row(self.align_label, self.align)
@@ -173,6 +175,7 @@ class FullStagePage(PageScrollArea):
         self.add_sources.setText(tr(language, "stage_add_sources"))
         self.remove_source.setText(tr(language, "stage_remove_source"))
         self.parameters.title_label.setText(tr(language, "params"))
+        self.algorithm_label.setText(tr(language, "algorithm_label"))
         self.strength_label.setText(tr(language, "strength"))
         self.sigma_label.setText(tr(language, "reverb_label"))
         self.align_label.setText(tr(language, "auto_align"))
@@ -190,7 +193,17 @@ class FullStagePage(PageScrollArea):
         self.align.setToolTip(tr(language, "auto_align_tip"))
         self.center_extraction.setToolTip(tr(language, "center_extraction_tip"))
         self.weak_vocal_protection.setToolTip(tr(language, "weak_vocal_protection_tip"))
-        previous_sigma = self.sigma.currentData() or 8
+        previous_algorithm = self.algorithm.currentData() or cfg.algorithm.value
+        self.algorithm.clear()
+        for value, key in (
+            ("spectral_mask", "algorithm_spectral_mask"),
+            ("direct", "algorithm_direct"),
+        ):
+            self.algorithm.addItem(tr(language, key), userData=value)
+        self.algorithm.setCurrentIndex(max(0, self.algorithm.findData(previous_algorithm)))
+        self.algorithm.setToolTip(tr(language, "algorithm_tip"))
+        self.algorithm_label.setToolTip(tr(language, "algorithm_tip"))
+        previous_sigma = self.sigma.currentData() or cfg.sigma.value
         self.sigma.clear()
         for value, key in ((1, "sigma_0"), (3, "sigma_1"), (8, "sigma_2"), (16, "sigma_3")):
             self.sigma.addItem(tr(language, key), userData=value)
@@ -258,6 +271,7 @@ class FullStagePage(PageScrollArea):
             self.add_sources,
             self.remove_source,
             self.sources,
+            self.algorithm,
             self.strength,
             self.sigma,
             self.align,

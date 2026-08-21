@@ -27,6 +27,12 @@ class AppConfig(QConfig):
         OptionsValidator(["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]),
     )
     sigma = OptionsConfigItem("Reference", "Sigma", 8, OptionsValidator([1, 3, 8, 16]))
+    algorithm = OptionsConfigItem(
+        "Reference",
+        "Algorithm",
+        "spectral_mask",
+        OptionsValidator(["spectral_mask", "direct"]),
+    )
     auto_align = ConfigItem("Reference", "AutoAlign", True, BoolValidator())
     auto_find = ConfigItem("Reference", "AutoFind", True, BoolValidator())
     center_extraction = ConfigItem("Reference", "CenterExtraction", False, BoolValidator())

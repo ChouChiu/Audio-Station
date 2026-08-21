@@ -1,3 +1,5 @@
+from shared.dsp import ReferenceAlgorithm
+
 from .matching import analyze_full_stage
 from .models import (
     ClipKind,
@@ -12,6 +14,7 @@ __all__ = [
     "FullStageAnalysis",
     "FullStageJob",
     "FullStageResult",
+    "ReferenceAlgorithm",
     "TimelineClip",
     "analyze_full_stage",
 ]

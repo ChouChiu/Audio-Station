@@ -72,9 +72,10 @@ def run_reference_job(
     progress: ProgressCallback = lambda _event: None,
 ) -> ProcessingResult:
     logger.info(
-        "starting reference job: song=%s accompaniment=%s center=%s protection=%s",
+        "starting reference job: song=%s accompaniment=%s algorithm=%s center=%s protection=%s",
         job.song,
         job.accompaniment,
+        job.algorithm,
         job.center_extraction,
         job.weak_vocal_protection,
     )
@@ -126,6 +127,7 @@ def run_reference_job(
             job.sigma,
             token,
             processed_audio.samples,
+            algorithm=job.algorithm,
             center_extraction=job.center_extraction,
             weak_vocal_protection=job.weak_vocal_protection,
         )

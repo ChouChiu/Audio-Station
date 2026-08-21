@@ -1,10 +1,17 @@
+from functools import partial
+
 import numpy as np
 import pytest
+from scipy.signal import fftconvolve
 
-from features.reference_removal.dsp import align_audio, alignment, process_audio
+from features.reference_removal.dsp import align_audio, alignment
+from features.reference_removal.dsp import process_audio as _process_audio
 from features.reference_removal.dsp.alignment import _spectral_flux_lag
 from shared.audio import create_pcm_audio
+from shared.dsp import ReferenceAlgorithm
 from shared.processing import CancellationToken, ProcessingCancelled
+
+process_audio = partial(_process_audio, algorithm=ReferenceAlgorithm.DIRECT)
 
 
 def corr(first, second):
@@ -324,3 +331,105 @@ def test_process_audio_writes_supplied_disk_buffer(scene):
         assert np.isfinite(output).all()
     finally:
         target.cleanup()
+
+
+def test_spectral_mask_is_default_and_does_not_call_direct_subtraction(monkeypatch):
+    sample_rate = 8_000
+    time = np.arange(sample_rate * 2) / sample_rate
+    vocal = 0.3 * np.sin(2 * np.pi * 440 * time)
+    reference = 0.2 * np.sin(2 * np.pi * 110 * time)
+    mixture = np.stack([vocal + reference, 0.95 * vocal + reference])
+
+    monkeypatch.setattr(
+        "features.reference_removal.dsp.algorithms._direct_reference_cancel",
+        lambda *_args, **_kwargs: pytest.fail("spectral default must not call direct subtraction"),
+    )
+    output = _process_audio(
+        mixture,
+        np.stack([reference, reference]),
+        sample_rate,
+        1.0,
+        3,
+    )
+
+    assert corr(output[0], vocal) > 0.99
+    assert abs(corr(output[0], reference)) < 0.08
+
+
+def test_spectral_mask_ignores_reference_polarity():
+    sample_rate = 8_000
+    rng = np.random.default_rng(130)
+    reference = rng.normal(0.0, 0.08, (2, sample_rate * 2))
+    time = np.arange(reference.shape[1]) / sample_rate
+    vocal = np.stack([0.3 * np.sin(2 * np.pi * 431 * time)] * 2)
+    mixture = vocal + np.asarray([[0.7, 0.2], [-0.1, 0.8]]) @ reference
+
+    normal = _process_audio(mixture, reference, sample_rate, 1.0, 3)
+    inverted = _process_audio(mixture, -reference, sample_rate, 1.0, 3)
+
+    assert np.allclose(normal, inverted, atol=2e-5)
+    assert corr(normal.ravel(), vocal.ravel()) > 0.95
+
+
+def test_spectral_mask_leaves_an_unrelated_reference_nearly_bypassed():
+    sample_rate = 8_000
+    rng = np.random.default_rng(131)
+    mixture = rng.normal(0.0, 0.1, (2, sample_rate * 2))
+    unrelated = rng.normal(0.0, 0.1, mixture.shape)
+
+    output = _process_audio(mixture, unrelated, sample_rate, 1.0, 3)
+
+    assert corr(output.ravel(), mixture.ravel()) > 0.999
+    assert np.sqrt(np.mean((output - mixture) ** 2)) < 0.01
+
+
+def test_spectral_mask_handles_frequency_dependent_room_transfer_better_than_direct():
+    sample_rate = 8_000
+    length = sample_rate * 4
+    rng = np.random.default_rng(140)
+    reference = np.stack(
+        [
+            np.convolve(rng.normal(0.0, 0.11, length), np.ones(3) / 3, mode="same"),
+            np.convolve(rng.normal(0.0, 0.11, length), np.ones(7) / 7, mode="same"),
+        ]
+    )
+
+    def impulse(size, taps):
+        response = np.zeros(size)
+        for delay, gain in taps:
+            response[delay] = gain
+        return response
+
+    transfers = (
+        impulse(301, ((0, 0.45), (57, 0.4), (160, -0.25), (300, 0.2))),
+        impulse(241, ((15, 0.35), (100, 0.25), (240, -0.2))),
+        impulse(281, ((7, -0.3), (120, 0.25), (280, 0.2))),
+        impulse(351, ((0, 0.5), (73, 0.35), (180, -0.25), (350, 0.2))),
+    )
+    transferred = np.stack(
+        [
+            fftconvolve(reference[0], transfers[0])[:length]
+            + fftconvolve(reference[1], transfers[1])[:length],
+            fftconvolve(reference[0], transfers[2])[:length]
+            + fftconvolve(reference[1], transfers[3])[:length],
+        ]
+    )
+    time = np.arange(length) / sample_rate
+    center = 0.24 * np.sin(2 * np.pi * 431 * time) + 0.1 * np.sin(2 * np.pi * 863 * time)
+    vocal = np.stack([center, 0.95 * center])
+    mixture = vocal + transferred
+
+    spectral = _process_audio(mixture, reference, sample_rate, 1.0, 3)
+    direct = _process_audio(
+        mixture,
+        reference,
+        sample_rate,
+        1.0,
+        3,
+        algorithm=ReferenceAlgorithm.DIRECT,
+    )
+
+    spectral_error = np.sqrt(np.mean((spectral - vocal) ** 2))
+    direct_error = np.sqrt(np.mean((direct - vocal) ** 2))
+    assert spectral_error < 0.97 * direct_error
+    assert corr(spectral.ravel(), vocal.ravel()) >= corr(direct.ravel(), vocal.ravel())

@@ -1,12 +1,19 @@
 from __future__ import annotations
 
+import math
 import mmap
 
 import numpy as np
-from scipy.ndimage import gaussian_filter
+from scipy.ndimage import gaussian_filter, gaussian_filter1d, uniform_filter1d
 
-from shared.dsp import fft_frequencies, istft, stft
+from shared.dsp import ReferenceAlgorithm, fft_frequencies, istft, stft
 from shared.processing import CancellationToken
+
+_MASK_FLOOR = 0.05
+_CONFIDENCE_LOW = 0.03
+_CONFIDENCE_HIGH = 0.35
+_DECISION_MEMORY = 0.8
+_SPECTRAL_OVERSUBTRACTION = 1.5
 
 
 def _release_mapped_pages(values: np.ndarray) -> None:
@@ -70,6 +77,40 @@ def _smooth(values: np.ndarray, sigma_time: float, sigma_frequency: float = 1.0)
 
 def _smooth_complex(values: np.ndarray, sigma_time: float) -> np.ndarray:
     return _smooth(values.real, sigma_time) + 1j * _smooth(values.imag, sigma_time)
+
+
+def _spectral_smooth(
+    values: np.ndarray,
+    sigma_time: float,
+    sigma_frequency: float = 1.0,
+) -> np.ndarray:
+    """Smooth long spectral contexts in O(N) time along the frame axis."""
+    if np.iscomplexobj(values):
+        return _spectral_smooth(values.real, sigma_time, sigma_frequency) + 1j * _spectral_smooth(
+            values.imag,
+            sigma_time,
+            sigma_frequency,
+        )
+    window = max(round(6.0 * sigma_time), 1)
+    smoothed = uniform_filter1d(values, size=window, axis=0, mode="reflect")
+    if sigma_frequency > 0.0:
+        smoothed = gaussian_filter1d(
+            smoothed,
+            sigma=sigma_frequency,
+            axis=1,
+            mode="reflect",
+        )
+    return smoothed
+
+
+def _weighted_smooth(
+    values: np.ndarray,
+    weights: np.ndarray,
+    sigma_time: float,
+) -> np.ndarray:
+    denominator = _spectral_smooth(weights, sigma_time) + 1e-12
+    numerator = _spectral_smooth(values * weights, sigma_time)
+    return numerator / denominator
 
 
 def _smoothstep(low: float, high: float, values: np.ndarray) -> np.ndarray:
@@ -143,21 +184,19 @@ def _phantom_center_enhance(
     )
 
 
-def _cancel_reference(
+def _direct_reference_cancel(
     song: np.ndarray,
     reference: np.ndarray,
     sample_rate: int,
     strength: float,
     sigma: float,
-    center_extraction: bool,
-    weak_vocal_protection: bool,
     token: CancellationToken,
 ) -> np.ndarray:
-    """Apply direct reference cancellation and optional center extraction.
+    """Apply the legacy direct reference cancellation path.
 
     Estimate only a slowly varying 2x2 real gain matrix, then subtract the
-    resulting reference waveform directly. Optional spatial stages are explicit
-    so the base result remains a simple polarity-style reference cancellation.
+    resulting reference waveform directly. This path remains available only for
+    explicit A/B comparison with the spectral-mask default.
     """
     length = min(song.shape[1], reference.shape[1])
     mix = np.asarray(song[:, :length], dtype=np.float64)
@@ -204,18 +243,168 @@ def _cancel_reference(
                 )
                 predicted += gain * accompaniment[input_channel, start:end]
             residual[output_channel, start:end] -= strength * predicted
-    if not center_extraction:
-        return residual
-    # Preserve the confirmed 75% default sound while making the strength slider
-    # continuous near bypass. Above the default, only reference cancellation
-    # becomes stronger; center enhancement does not keep narrowing the stereo image.
-    center_amount = min(strength / 0.75, 1.0)
-    return _phantom_center_enhance(
-        residual,
-        sample_rate,
-        center_amount,
-        weak_vocal_protection,
+    return residual
+
+
+def _analysis_fft_size(sample_rate: int) -> int:
+    target = max(0.046 * sample_rate, 1.0)
+    exponent = round(math.log2(target))
+    return int(np.clip(2**exponent, 512, 4096))
+
+
+def _spectral_transfer_prediction(
+    song_spectra: list[np.ndarray],
+    reference_spectra: list[np.ndarray],
+    sigma_frames: float,
+    token: CancellationToken,
+    weights: np.ndarray | None = None,
+) -> list[np.ndarray]:
+    """Predict reference-correlated spectra without subtracting them from the mix."""
+    epsilon = 1e-12
+    x0, x1 = reference_spectra[:2]
+    if weights is None:
+        weights = np.ones(x0.shape, dtype=np.float32)
+    r00 = _weighted_smooth(np.abs(x0) ** 2, weights, sigma_frames).real
+    r11 = _weighted_smooth(np.abs(x1) ** 2, weights, sigma_frames).real
+    r01 = _weighted_smooth(x0 * np.conj(x1), weights, sigma_frames)
+    loading = 2e-4 * 0.5 * (r00 + r11) + epsilon
+    r00 += loading
+    r11 += loading
+    determinant = np.maximum((r00 * r11 - np.abs(r01) ** 2).real, epsilon)
+    predicted: list[np.ndarray] = []
+    for channel in song_spectra:
+        token.raise_if_cancelled()
+        ry0 = _weighted_smooth(channel * np.conj(x0), weights, sigma_frames)
+        ry1 = _weighted_smooth(channel * np.conj(x1), weights, sigma_frames)
+        h0 = (ry0 * r11 - ry1 * np.conj(r01)) / determinant
+        h1 = (ry1 * r00 - ry0 * r01) / determinant
+        row_gain = np.abs(h0) + np.abs(h1)
+        gain_scale = np.minimum(1.0, 2.0 / (row_gain + epsilon))
+        predicted.append((gain_scale * (h0 * x0 + h1 * x1)).astype(np.complex64))
+    return predicted
+
+
+def _spectral_mask_extract(
+    song: np.ndarray,
+    reference: np.ndarray,
+    sample_rate: int,
+    strength: float,
+    sigma: float,
+    token: CancellationToken,
+) -> np.ndarray:
+    """Extract reference-independent content with a confidence-weighted soft mask.
+
+    The estimated complex reference transfer is used only to model accompaniment
+    power. Reconstruction always multiplies the original mixture spectra by a
+    linked real mask, so this path performs no waveform or complex-spectrum
+    polarity subtraction.
+    """
+    length = min(song.shape[1], reference.shape[1])
+    mix = np.asarray(song[:, :length], dtype=np.float64)
+    accompaniment = np.asarray(reference[:, :length], dtype=np.float64)
+    n_fft = _analysis_fft_size(sample_rate)
+    hop = n_fft // 4
+    song_spectra = [stft(channel, n_fft=n_fft, hop=hop).astype(np.complex64) for channel in mix]
+    token.raise_if_cancelled()
+    reference_spectra = [
+        stft(channel, n_fft=n_fft, hop=hop).astype(np.complex64) for channel in accompaniment[:2]
+    ]
+    if not reference_spectra:
+        return mix.copy()
+    if len(reference_spectra) == 1:
+        reference_spectra.append(reference_spectra[0])
+    sigma_frames = max(float(sigma) * sample_rate / hop / 6.0, 1.0)
+
+    predicted = _spectral_transfer_prediction(
+        song_spectra,
+        reference_spectra,
+        sigma_frames,
         token,
+    )
+    residual_power = np.zeros(song_spectra[0].shape, dtype=np.float32)
+    for mixture_channel, predicted_channel in zip(song_spectra, predicted, strict=True):
+        residual_power += np.abs(mixture_channel - predicted_channel) ** 2
+    local_residual = _spectral_smooth(residual_power, sigma_frames)
+    robust_weights = np.minimum(1.0, 4.0 * local_residual / (residual_power + 1e-12)).astype(
+        np.float32
+    )
+    predicted = _spectral_transfer_prediction(
+        song_spectra,
+        reference_spectra,
+        sigma_frames,
+        token,
+        robust_weights,
+    )
+    token.raise_if_cancelled()
+
+    mixture_power = np.zeros(song_spectra[0].shape, dtype=np.float32)
+    removable_power = np.zeros_like(mixture_power)
+    predicted_power = np.zeros_like(mixture_power)
+    confidence_sigma = max(sigma_frames / 2.0, 1.0)
+    for mixture_channel, predicted_channel in zip(song_spectra, predicted, strict=True):
+        channel_power = np.abs(mixture_channel) ** 2
+        reference_power = np.abs(predicted_channel) ** 2
+        smoothed_mix = _spectral_smooth(channel_power, confidence_sigma)
+        smoothed_reference = _spectral_smooth(reference_power, confidence_sigma)
+        cross = _spectral_smooth(
+            mixture_channel * np.conj(predicted_channel),
+            confidence_sigma,
+        )
+        coherence = np.clip(
+            np.abs(cross) ** 2 / (smoothed_mix * smoothed_reference + 1e-12),
+            0.0,
+            1.0,
+        )
+        confidence = _smoothstep(_CONFIDENCE_LOW, _CONFIDENCE_HIGH, coherence)
+        mixture_power += channel_power
+        predicted_power += reference_power
+        removable_power += confidence * reference_power
+
+    instantaneous = np.maximum(
+        mixture_power - _SPECTRAL_OVERSUBTRACTION * removable_power,
+        (_MASK_FLOOR**2) * mixture_power,
+    )
+    directed = np.empty_like(instantaneous)
+    directed[0] = instantaneous[0]
+    for frame in range(1, instantaneous.shape[0]):
+        if frame % 256 == 0:
+            token.raise_if_cancelled()
+        directed[frame] = (
+            _DECISION_MEMORY * directed[frame - 1] + (1.0 - _DECISION_MEMORY) * instantaneous[frame]
+        )
+    mask = np.sqrt(np.clip(directed / (mixture_power + 1e-12), _MASK_FLOOR**2, 1.0))
+    # Keep frequency smoothing narrow: a full-bin blur refills tonal notches from
+    # their untouched neighbours and leaves clearly audible reference harmonics.
+    mask = gaussian_filter(mask, sigma=(0.75, 0.35), mode="reflect")
+
+    mixture_magnitude = np.sqrt(mixture_power)
+    reference_magnitude = np.sqrt(predicted_power)
+    mixture_flux = np.maximum(
+        np.diff(mixture_magnitude, axis=0, prepend=mixture_magnitude[:1]), 0.0
+    )
+    reference_flux = np.maximum(
+        np.diff(reference_magnitude, axis=0, prepend=reference_magnitude[:1]),
+        0.0,
+    )
+    novelty = np.clip(
+        (mixture_flux - reference_flux) / (mixture_flux + 1e-12),
+        0.0,
+        1.0,
+    )
+    flux_activity = np.clip(mixture_flux / (mixture_magnitude + 1e-12), 0.0, 1.0)
+    novelty *= _smoothstep(0.02, 0.2, flux_activity)
+    reference_confidence = np.clip(
+        removable_power / (predicted_power + 1e-12),
+        0.0,
+        1.0,
+    )
+    novelty *= 1.0 - _smoothstep(0.5, 0.9, reference_confidence)
+    mask = np.maximum(mask, _smoothstep(0.15, 0.75, novelty))
+    effective_mask = 1.0 - strength * (1.0 - np.clip(mask, _MASK_FLOOR, 1.0))
+    token.raise_if_cancelled()
+    return np.asarray(
+        [istft(channel * effective_mask, hop=hop, length=length) for channel in song_spectra],
+        dtype=np.float64,
     )
 
 
@@ -228,6 +417,7 @@ def process_audio(
     token: CancellationToken | None = None,
     output: np.ndarray | None = None,
     *,
+    algorithm: ReferenceAlgorithm | str = ReferenceAlgorithm.SPECTRAL_MASK,
     center_extraction: bool = False,
     weak_vocal_protection: bool = False,
 ) -> np.ndarray:
@@ -236,6 +426,7 @@ def process_audio(
     accompaniment = np.asarray(reference, dtype=np.float32)
     if mix.ndim != 2 or accompaniment.ndim != 2 or sample_rate <= 0:
         raise ValueError("audio must have shape [channels, frames] and a positive sample rate")
+    selected_algorithm = ReferenceAlgorithm(algorithm)
     strength = float(np.clip(strength, 0.0, 1.0))
     length = min(mix.shape[1], accompaniment.shape[1])
     mix, accompaniment = mix[:, :length], accompaniment[:, :length]
@@ -255,16 +446,36 @@ def process_audio(
     for index, start in enumerate(starts):
         cancel.raise_if_cancelled()
         end = min(start + block, length)
-        processed = _cancel_reference(
-            mix[:, start:end],
-            accompaniment[:, start:end],
-            sample_rate,
-            strength,
-            sigma,
-            center_extraction,
-            weak_vocal_protection,
-            cancel,
-        )
+        if selected_algorithm == ReferenceAlgorithm.SPECTRAL_MASK:
+            processed = _spectral_mask_extract(
+                mix[:, start:end],
+                accompaniment[:, start:end],
+                sample_rate,
+                strength,
+                sigma,
+                cancel,
+            )
+        else:
+            processed = _direct_reference_cancel(
+                mix[:, start:end],
+                accompaniment[:, start:end],
+                sample_rate,
+                strength,
+                sigma,
+                cancel,
+            )
+        if center_extraction:
+            # Preserve the confirmed 75% enhancement sound while making the
+            # strength slider continuous near bypass. Above 75%, only the core
+            # extractor becomes stronger instead of narrowing the image further.
+            center_amount = min(strength / 0.75, 1.0)
+            processed = _phantom_center_enhance(
+                processed,
+                sample_rate,
+                center_amount,
+                weak_vocal_protection,
+                cancel,
+            )
         fade = min(overlap, end - start) if index > 0 else 0
         if fade:
             phase = np.linspace(0, np.pi / 2, fade, dtype=np.float64)

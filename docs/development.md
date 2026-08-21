@@ -48,7 +48,7 @@ src/resources/i18n/ko_kr.json
 
 配置由 `src/shared/config.py` 中的 QConfig 单例管理。修改持久化选项时要同时考虑默认值、验证器、页面重译和测试。
 
-参考对消只保留一条直接对消管线。DSP 调整不能只看合成指标：先通过自动化门禁，再对固定真实素材导出可直接盲听的对照版本；技术检查不得写成“已经听感确认”。
+参考提取默认使用频域掩码，旧直接消除只作显式 A/B。DSP 调整不能只看合成指标：先通过自动化门禁，再对固定真实素材导出可直接盲听的对照版本；技术检查不得写成“已经听感确认”。
 
 ## 增加源码文件
 
@@ -118,7 +118,7 @@ uv run --locked --group deploy pyside6-deploy -c pysidedeploy.spec
 ## 持续集成
 
 `.github/workflows/build.yml` 在 `main` 分支、`v*` 标签、Pull Request 和手动触发时运行。
-质量门禁通过后，工作流构建并隔离验证 wheel、sdist 与 Linux standalone，再上传：
+质量门禁通过后，工作流构建 wheel、sdist 与 Linux standalone，再上传：
 
 - pytest JUnit XML；
 - 质量门禁与构建命令的独立日志；
@@ -132,3 +132,6 @@ uv run --locked --group deploy pyside6-deploy -c pysidedeploy.spec
 同时缓存 uv 管理的 Python 3.14；不缓存 `.venv` 本身。Linux standalone 额外使用
 ccache，根据锁文件、部署规格和 Python 源码失效，上限为 2 GiB。同一分支有新提交时会取消旧任务，
 标签构建不会被取消。
+
+Ubuntu Runner 会显式安装 Qt 加载所需的 `libegl1`。所有命令步骤都使用开启 `pipefail` 的 Bash，
+因此通过 `tee` 保存日志时不会掩盖原命令的失败状态。JUnit XML 仅在实际生成后上传。

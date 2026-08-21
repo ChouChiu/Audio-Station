@@ -126,8 +126,9 @@ def run_full_stage_job(
     progress: ProgressCallback = lambda _event: None,
 ) -> FullStageResult:
     logger.info(
-        "full-stage render settings: strength=%d sigma=%d auto_align=%s "
+        "full-stage render settings: algorithm=%s strength=%d sigma=%d auto_align=%s "
         "center_extraction=%s weak_vocal_protection=%s include_fragments=%s",
+        job.algorithm,
         job.strength,
         job.sigma,
         job.auto_align,
@@ -232,6 +233,7 @@ def run_full_stage_job(
                     job.sigma,
                     token,
                     processed_audio.samples,
+                    algorithm=job.algorithm,
                     center_extraction=job.center_extraction,
                     weak_vocal_protection=job.weak_vocal_protection,
                 )

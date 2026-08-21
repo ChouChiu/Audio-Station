@@ -174,6 +174,7 @@ class MainWindow(FluentWindow):
                 sigma=int(self.mr.sigma.currentData()),
                 auto_align=self.mr.align.isChecked(),
                 language=self.language,
+                algorithm=str(self.mr.algorithm.currentData()),
                 center_extraction=self.mr.center_extraction.isChecked(),
                 weak_vocal_protection=self.mr.weak_vocal_protection.isChecked(),
             )
@@ -181,6 +182,7 @@ class MainWindow(FluentWindow):
             self._warning("warn_invalid_parameters")
             return
         cfg.set(cfg.sigma, job.sigma)
+        cfg.set(cfg.algorithm, str(job.algorithm))
         cfg.set(cfg.auto_align, job.auto_align)
         cfg.set(cfg.auto_find, self.mr.auto_find.isChecked())
         cfg.set(cfg.center_extraction, job.center_extraction)
@@ -227,6 +229,7 @@ class MainWindow(FluentWindow):
                 language=self.language,
                 include_fragments=self.full_stage.include_fragments.isChecked(),
                 auto_align=self.full_stage.align.isChecked(),
+                algorithm=str(self.full_stage.algorithm.currentData()),
                 center_extraction=self.full_stage.center_extraction.isChecked(),
                 weak_vocal_protection=self.full_stage.weak_vocal_protection.isChecked(),
             )
@@ -234,6 +237,7 @@ class MainWindow(FluentWindow):
             self._warning("warn_output_conflict")
             return None
         cfg.set(cfg.sigma, job.sigma)
+        cfg.set(cfg.algorithm, str(job.algorithm))
         cfg.set(cfg.auto_align, job.auto_align)
         cfg.set(cfg.center_extraction, job.center_extraction)
         cfg.set(cfg.weak_vocal_protection, job.weak_vocal_protection)
