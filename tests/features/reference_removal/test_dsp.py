@@ -356,6 +356,40 @@ def test_spectral_mask_is_default_and_does_not_call_direct_subtraction(monkeypat
     assert abs(corr(output[0], reference)) < 0.08
 
 
+def test_direct_residual_does_not_inject_reference_only_lyrics():
+    sample_rate = 8_000
+    length = sample_rate * 3
+    time = np.arange(length) / sample_rate
+    changed = time >= 1.0
+    backing = 0.25 * np.sin(2 * np.pi * 125 * time)
+    live_word = changed * 0.28 * np.sin(2 * np.pi * 437 * time)
+    reference_only_word = changed * 0.22 * np.sin(2 * np.pi * 703 * time)
+    mixture = np.stack([backing + live_word, 0.95 * backing + 0.9 * live_word])
+    contaminated_reference = np.stack(
+        [backing + reference_only_word, 0.92 * backing + reference_only_word]
+    )
+
+    output = _process_audio(
+        mixture,
+        contaminated_reference,
+        sample_rate,
+        1.0,
+        8,
+        algorithm=ReferenceAlgorithm.DIRECT,
+    )
+
+    old_word = np.stack([reference_only_word, reference_only_word])
+    old_word_gain = np.dot(output.ravel(), old_word.ravel()) / np.dot(
+        old_word.ravel(), old_word.ravel()
+    )
+    live_word_gain = np.dot(output.ravel(), np.tile(live_word, (2, 1)).ravel()) / np.dot(
+        np.tile(live_word, (2, 1)).ravel(),
+        np.tile(live_word, (2, 1)).ravel(),
+    )
+    assert abs(old_word_gain) < 0.01
+    assert live_word_gain > 0.7
+
+
 def test_spectral_mask_ignores_reference_polarity():
     sample_rate = 8_000
     rng = np.random.default_rng(130)

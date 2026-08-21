@@ -72,7 +72,7 @@ WAV 写出先生成同目录临时文件，成功后使用 `os.replace` 原子�
 ```mermaid
 flowchart TB
     input["音频输入"] --> choice{"工作流"}
-    choice -->|单曲参考对消| mr["对齐参考音源<br/>频域掩码或旧直接消除"]
+    choice -->|单曲参考对消| mr["对齐参考音源<br/>频域掩码或安全直接残差"]
     choice -->|完整舞台| stage["多音源匹配<br/>按时间线分段对消"]
     choice -->|AI 人声分离| ai["模型分块推理<br/>计算人声与背景"]
     mr --> mrout["24-bit 人声 WAV"]

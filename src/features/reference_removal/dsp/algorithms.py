@@ -192,11 +192,12 @@ def _direct_reference_cancel(
     sigma: float,
     token: CancellationToken,
 ) -> np.ndarray:
-    """Apply the legacy direct reference cancellation path.
+    """Measure the legacy direct-reference residual without returning it to users.
 
     Estimate only a slowly varying 2x2 real gain matrix, then subtract the
-    resulting reference waveform directly. This path remains available only for
-    explicit A/B comparison with the spectral-mask default.
+    resulting reference waveform directly. The candidate can contain an
+    anti-reference when the reference has material absent from the mixture, so
+    callers must project its magnitude onto the original mixture before output.
     """
     length = min(song.shape[1], reference.shape[1])
     mix = np.asarray(song[:, :length], dtype=np.float64)
@@ -244,6 +245,59 @@ def _direct_reference_cancel(
                 predicted += gain * accompaniment[input_channel, start:end]
             residual[output_channel, start:end] -= strength * predicted
     return residual
+
+
+def _project_residual_onto_mixture(
+    mixture: np.ndarray,
+    candidate: np.ndarray,
+    sample_rate: int,
+    token: CancellationToken,
+) -> np.ndarray:
+    """Keep candidate attenuation while retaining only original-mixture spectra.
+
+    A direct residual ``Y - H X`` can synthesize ``-H X`` when the reference
+    contains an original lyric or instrument that is absent from the live mix.
+    Use that residual only to measure a linked attenuation mask, then reconstruct
+    from ``Y``. The output therefore cannot contain a reference-only spectrum or
+    its inverted-polarity form.
+    """
+    length = min(mixture.shape[1], candidate.shape[1])
+    original = np.asarray(mixture[:, :length], dtype=np.float64)
+    measured = np.asarray(candidate[:, :length], dtype=np.float64)
+    if np.array_equal(original, measured):
+        return original.copy()
+    n_fft = _analysis_fft_size(sample_rate)
+    hop = n_fft // 4
+    original_spectra = [
+        stft(channel, n_fft=n_fft, hop=hop).astype(np.complex64) for channel in original
+    ]
+    candidate_spectra = [
+        stft(channel, n_fft=n_fft, hop=hop).astype(np.complex64) for channel in measured
+    ]
+    token.raise_if_cancelled()
+    original_power = np.zeros(original_spectra[0].shape, dtype=np.float32)
+    candidate_power = np.zeros_like(original_power)
+    for original_channel, candidate_channel in zip(
+        original_spectra,
+        candidate_spectra,
+        strict=True,
+    ):
+        original_power += np.abs(original_channel) ** 2
+        candidate_power += np.abs(candidate_channel) ** 2
+    mask = np.sqrt(
+        np.clip(
+            candidate_power / (original_power + 1e-12),
+            _MASK_FLOOR**2,
+            1.0,
+        )
+    )
+    mask = gaussian_filter(mask, sigma=(0.35, 0.2), mode="reflect")
+    mask = np.clip(mask, _MASK_FLOOR, 1.0)
+    token.raise_if_cancelled()
+    return np.asarray(
+        [istft(channel * mask, hop=hop, length=length) for channel in original_spectra],
+        dtype=np.float64,
+    )
 
 
 def _analysis_fft_size(sample_rate: int) -> int:
@@ -456,12 +510,18 @@ def process_audio(
                 cancel,
             )
         else:
-            processed = _direct_reference_cancel(
+            candidate = _direct_reference_cancel(
                 mix[:, start:end],
                 accompaniment[:, start:end],
                 sample_rate,
                 strength,
                 sigma,
+                cancel,
+            )
+            processed = _project_residual_onto_mixture(
+                mix[:, start:end],
+                candidate,
+                sample_rate,
                 cancel,
             )
         if center_extraction:

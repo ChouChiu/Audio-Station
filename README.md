@@ -102,10 +102,10 @@ uv run --locked audio-station mr "现场录音.wav" "参考伴奏.wav" "现场�
   --center-extraction --weak-vocal-protection
 ```
 
-与旧直接消除算法进行 A/B：
+与安全直接残差算法进行 A/B：
 
 ```bash
-uv run --locked audio-station mr "现场录音.wav" "参考伴奏.wav" "旧算法对照.wav" \
+uv run --locked audio-station mr "现场录音.wav" "参考伴奏.wav" "安全残差对照.wav" \
   --algorithm direct --strength 75 --sigma 8 --align
 ```
 
@@ -113,7 +113,7 @@ uv run --locked audio-station mr "现场录音.wav" "参考伴奏.wav" "旧算�
 
 | 参数 | 取值 | 说明 |
 |---|---:|---|
-| `--algorithm` | `spectral_mask`、`direct` | 默认使用不直接相减参考波形的频域掩码；`direct` 为旧算法对照 |
+| `--algorithm` | `spectral_mask`、`direct` | 默认使用频域掩码；`direct` 保留旧名称，但只把直接残差用于计算衰减量，不会把参考波形写入输出 |
 | `--strength` | `0`～`100` | 参考信号的消除强度，默认 `75` |
 | `--sigma` | `1`、`3`、`8`、`16` | 增益跟踪窗口秒数，默认 `8` |
 | `--align` / `--no-align` | 开 / 关 | 是否自动对齐，默认开启 |
