@@ -50,11 +50,25 @@ jobs:
       - name: Prepare logs
         run: mkdir -p logs
 
+      - name: Restore system cache
+        id: system-cache
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/apt-archives
+          key: >-
+            apt-${{ runner.os }}-${{ runner.arch }}-ubuntu-24.04-libegl1-libpulse0-v1
+
       - name: Install system deps
         run: |
           {
+            apt_cache_dir="${RUNNER_TEMP}/apt-archives"
+            sudo install -d -m 0755 "$apt_cache_dir"
+            sudo install -d -o _apt -g root -m 0700 "$apt_cache_dir/partial"
             sudo apt-get update
-            sudo apt-get install --yes --no-install-recommends libegl1 libpulse0
+            sudo apt-get install --yes --no-install-recommends \
+              -o Dir::Cache::archives="$apt_cache_dir" \
+              libegl1 libpulse0
+            sudo chown -R "$(id -u):$(id -g)" "$apt_cache_dir"
           } 2>&1 | tee logs/system-deps.log
 
       - name: Sync dependencies
@@ -122,6 +136,7 @@ jobs:
           | Tests | `${{ steps.tests.outcome }}` |
           | Self-test | `${{ steps.self-test.outcome }}` |
           | uv cache | `${{ steps.setup-uv.outputs.cache-hit }}` |
+          | System cache | `${{ steps.system-cache.outputs.cache-hit }}` |
 
           - Test report: ${{ steps.test-artifact.outputs.artifact-url || 'Not uploaded' }}
           - Quality logs: ${{ steps.logs-artifact.outputs.artifact-url || 'Not uploaded' }}
@@ -154,11 +169,27 @@ jobs:
       - name: Prepare logs
         run: mkdir -p logs
 
+      - name: Restore system cache
+        id: system-cache
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/apt-archives
+          key: >-
+            apt-${{ runner.os }}-${{ runner.arch }}-ubuntu-24.04-libegl1-libpulse0-ccache-v1
+          restore-keys: |
+            apt-${{ runner.os }}-${{ runner.arch }}-ubuntu-24.04-libegl1-libpulse0-
+
       - name: Install system deps
         run: |
           {
+            apt_cache_dir="${RUNNER_TEMP}/apt-archives"
+            sudo install -d -m 0755 "$apt_cache_dir"
+            sudo install -d -o _apt -g root -m 0700 "$apt_cache_dir/partial"
             sudo apt-get update
-            sudo apt-get install --yes --no-install-recommends libegl1 libpulse0
+            sudo apt-get install --yes --no-install-recommends \
+              -o Dir::Cache::archives="$apt_cache_dir" \
+              libegl1 libpulse0 ccache
+            sudo chown -R "$(id -u):$(id -g)" "$apt_cache_dir"
           } 2>&1 | tee logs/system-deps.log
 
       - name: Restore compiler cache
@@ -254,6 +285,7 @@ jobs:
           | Distributions | `${{ steps.distributions.outcome }}` |
           | Standalone build | `${{ steps.standalone-build.outcome }}` |
           | uv cache | `${{ steps.setup-uv.outputs.cache-hit }}` |
+          | System cache | `${{ steps.system-cache.outputs.cache-hit }}` |
           | Compiler cache | `${{ steps.compiler-cache.outputs.cache-hit }}` |
 
           ### Artifacts
