@@ -44,7 +44,7 @@ Invariants enforced by `tests/test_architecture.py`: `shared` must never import 
 | `src/shared/dsp/` | `spectral.py`: librosa-compatible `stft`/`istft`, `n_fft=2048`, `hop=512` |
 | `src/shared/ui/` | `combo_box.py` (`SmoothComboBox`, qfw slide animation disabled), `cards.py` (FormCard rows) |
 | `src/shared/` | `config.py` (QConfig), `i18n.py` (`tr()`), `logging.py` (single-line formatter), `processing.py` (token/progress types) |
-| `src/resources/` | `i18n/{zh_cn,ja_jp,ko_kr}.json` (flat keys, must stay key-identical), `model_data.json` (MDX-Net spec table keyed by MD5), `__init__.py` (`resource_path` via `importlib.resources`) |
+| `src/resources/` | `i18n/{zh_cn,en_us,ja_jp,ko_kr}.json` (flat keys, must stay key-identical), `model_data.json` (MDX-Net spec table keyed by MD5), `__init__.py` (`resource_path` via `importlib.resources`) |
 | `tests/` | Mirrors `src/` path-for-path (`tests/shared/` ↔ `src/shared/`, `tests/features/…`); `benchmarks/` for long/`--runslow` gates |
 | `models/` | 4 prebuilt ONNX weights (gitignored, never committed); not shipped in wheels/standalone |
 | `deployment/` | `main.py` — standalone Nuitka entry shim |
@@ -73,7 +73,7 @@ uv sync --locked --group deploy
 uv run --locked --group deploy pyside6-deploy -c pysidedeploy.spec
 ```
 
-Language keys: `zh_cn`, `ja_jp`, `ko_kr`.
+Language keys: `zh_cn`, `en_us`, `ja_jp`, `ko_kr`.
 
 ## Code Conventions & Common Patterns
 
@@ -102,7 +102,7 @@ Language keys: `zh_cn`, `ja_jp`, `ko_kr`.
 | `src/features/reference_removal/dsp/alignment.py` | GCC-PHAT coarse alignment + local drift tracking + Lanczos warp |
 | `src/features/neural_separation/inference.py` / `model_store.py` | MdxNet ONNX wrapper (chunked overlap-add); model search/download/SHA-256 |
 | `src/resources/model_data.json` | 65-entry MDX-Net spec table keyed by model-MD5 (`compensate`, `mdx_dim_f_set`, `mdx_dim_t_set`, `mdx_n_fft_scale_set`, `primary_stem`) |
-| `src/resources/i18n/*.json` | UI strings: flat snake_case keys, zh_cn/ja_jp/ko_kr (~120 keys, key-parity tested) |
+| `src/resources/i18n/*.json` | UI strings: flat snake_case keys, zh_cn/en_us/ja_jp/ko_kr (~150 keys, key-parity tested) |
 | `tests/test_architecture.py` | AST import-boundary gate (shared isolation, feature isolation) |
 | `tests/conftest.py` | forces `QT_QPA_PLATFORM=offscreen`, adds `--runslow`, auto-skips `slow` tests |
 

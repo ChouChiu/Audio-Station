@@ -15,7 +15,10 @@ from qfluentwidgets import (
 
 class AppConfig(QConfig):
     language = OptionsConfigItem(
-        "General", "Language", "zh_cn", OptionsValidator(["zh_cn", "ja_jp", "ko_kr"])
+        "General",
+        "Language",
+        "zh_cn",
+        OptionsValidator(["zh_cn", "en_us", "ja_jp", "ko_kr"]),
     )
     theme = OptionsConfigItem(
         "General", "Theme", "auto", OptionsValidator(["light", "dark", "auto"])

@@ -39,11 +39,12 @@ Ruff 行宽为 100，启用 E、F、I、UP、B、SIM 和 RUF 规则，E501 由�
 
 ```text
 src/resources/i18n/zh_cn.json
+src/resources/i18n/en_us.json
 src/resources/i18n/ja_jp.json
 src/resources/i18n/ko_kr.json
 ```
 
-增加、删除或重命名翻译键时必须同步修改三个文件；测试会检查键集合完全一致。调用
+增加、删除或重命名翻译键时必须同步修改四个文件；测试会检查键集合完全一致。调用
 `tr(language, key, **values)` 时不得依赖“未知键返回键名”的回退行为。
 
 配置由 `src/shared/config.py` 中的 QConfig 单例管理。修改持久化选项时要同时考虑默认值、验证器、页面重译和测试。

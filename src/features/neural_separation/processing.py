@@ -9,7 +9,13 @@ from features.neural_separation.model_store import ensure_model
 from features.neural_separation.models import NeuralJob
 from shared.audio import create_pcm_audio, read_audio, resample_audio, write_wav_atomic
 from shared.i18n import tr
-from shared.processing import CancellationToken, ProcessingResult, ProgressCallback, ProgressEvent
+from shared.processing import (
+    CancellationToken,
+    ProcessingCancelled,
+    ProcessingResult,
+    ProgressCallback,
+    ProgressEvent,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -46,9 +52,14 @@ def run_neural_job(
             resampled = resample_audio(song, 44_100, token)
             song.cleanup()
             song = resampled
-        model_path = ensure_model(entry, job.models_dir, token, progress)
+        model_path = ensure_model(entry, job.models_dir, job.language, token, progress)
         _emit(progress, 25, job.language, "ai_loading_model")
-        network = MdxNet(model_path)
+        try:
+            network = MdxNet(model_path)
+        except ProcessingCancelled:
+            raise
+        except Exception as error:
+            raise RuntimeError(tr(job.language, "ai_err_model_load", msg=error)) from error
         _emit(progress, 27, job.language, "ai_inferring")
 
         def model_progress(current: int, total: int) -> None:
@@ -56,7 +67,12 @@ def run_neural_job(
             _emit(progress, value, job.language, "ai_inferring")
 
         vocal_audio = create_pcm_audio(2, song.frames, 44_100)
-        network.separate(song.samples, token, model_progress, vocal_audio.samples)
+        try:
+            network.separate(song.samples, token, model_progress, vocal_audio.samples)
+        except ProcessingCancelled:
+            raise
+        except Exception as error:
+            raise RuntimeError(tr(job.language, "ai_err_infer", msg=error)) from error
         background_audio = create_pcm_audio(2, song.frames, 44_100)
         block_size = 262_144
         for start in range(0, song.frames, block_size):

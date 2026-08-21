@@ -8,7 +8,13 @@ from pathlib import Path
 from PySide6.QtCore import QStandardPaths
 
 from features.neural_separation.catalog import ModelEntry
-from shared.processing import CancellationToken, ProgressCallback, ProgressEvent
+from shared.i18n import tr
+from shared.processing import (
+    CancellationToken,
+    ProcessingCancelled,
+    ProgressCallback,
+    ProgressEvent,
+)
 
 
 def default_models_dir() -> Path:
@@ -48,6 +54,7 @@ def _sha256(path: Path, token: CancellationToken) -> str:
 def ensure_model(
     entry: ModelEntry,
     override: Path | None,
+    language: str,
     token: CancellationToken,
     progress: ProgressCallback,
 ) -> Path:
@@ -67,12 +74,18 @@ def ensure_model(
                 output.write(chunk)
                 downloaded += len(chunk)
                 value = 15 + int(10 * downloaded / max(total, 1))
-                progress(ProgressEvent(min(value, 24), f"Downloading {entry.name}"))
+                progress(
+                    ProgressEvent(min(value, 24), tr(language, "ai_downloading", name=entry.name))
+                )
         if partial.stat().st_size != entry.size:
             raise RuntimeError("downloaded model size does not match catalog")
         if _sha256(partial, token) != entry.sha256:
             raise RuntimeError("downloaded model checksum does not match catalog")
         os.replace(partial, destination)
         return destination
+    except ProcessingCancelled:
+        raise
+    except Exception as error:
+        raise RuntimeError(tr(language, "ai_download_failed", msg=error)) from error
     finally:
         partial.unlink(missing_ok=True)

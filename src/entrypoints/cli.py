@@ -51,7 +51,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=False,
         help="protect a quiet center vocal; requires --center-extraction",
     )
-    reference.add_argument("--lang", choices=("zh_cn", "ja_jp", "ko_kr"), default="zh_cn")
+    reference.add_argument("--lang", choices=("zh_cn", "en_us", "ja_jp", "ko_kr"), default="zh_cn")
 
     neural = commands.add_parser("ai", help="MDX-Net vocal extraction")
     neural.add_argument("song", type=Path)
@@ -60,7 +60,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--model", choices=[entry.id for entry in model_catalog()], default=DEFAULT_MODEL_ID
     )
     neural.add_argument("--models-dir", type=Path)
-    neural.add_argument("--lang", choices=("zh_cn", "ja_jp", "ko_kr"), default="zh_cn")
+    neural.add_argument("--lang", choices=("zh_cn", "en_us", "ja_jp", "ko_kr"), default="zh_cn")
     return parser
 
 

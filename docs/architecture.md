@@ -108,7 +108,7 @@ flowchart TB
 ## 配置、翻译与日志
 
 - 配置由 QFluentWidgets 的 `QConfig` 持久化。
-- 翻译文件位于 `src/resources/i18n/`，采用扁平键；中文、日文、韩文的键集合必须完全一致。
+- 翻译文件位于 `src/resources/i18n/`，采用扁平键；中文、英文、日文、韩文的键集合必须完全一致。
 - 日志使用单行格式 `日期 时间 [级别] 模块: 消息`，Qt 与 FFmpeg 消息也会进入统一日志系统。
 - GUI 切换语言时，各页面通过 `retranslate()` 更新控件文本和下拉列表。
 
