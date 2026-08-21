@@ -13,7 +13,6 @@ from features.full_stage import (
     TimelineClip,
     analyze_full_stage,
 )
-from shared.dsp import ReferenceAlgorithm
 from shared.processing import CancellationToken
 
 
@@ -109,7 +108,6 @@ def test_full_stage_render_keeps_unmatched_audio_and_processes_song(tmp_path: Pa
         output_path,
         strength=100,
         sigma=1,
-        algorithm=ReferenceAlgorithm.DIRECT,
     )
 
     result = run_full_stage_job(job, analysis, CancellationToken())

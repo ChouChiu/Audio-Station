@@ -17,7 +17,7 @@ from features.neural_separation import (
     model_catalog,
     run_neural_job,
 )
-from features.reference_removal import ReferenceAlgorithm, ReferenceJob, run_reference_job
+from features.reference_removal import ReferenceJob, run_reference_job
 from shared.logging import configure_logging, set_log_level
 from shared.processing import CancellationToken, ProcessingCancelled, ProgressEvent
 
@@ -38,12 +38,6 @@ def build_parser() -> argparse.ArgumentParser:
         "--strength", type=int, choices=range(0, 101), default=75, metavar="0..100"
     )
     reference.add_argument("--sigma", type=int, choices=(1, 3, 8, 16), default=8)
-    reference.add_argument(
-        "--algorithm",
-        choices=tuple(ReferenceAlgorithm),
-        default=ReferenceAlgorithm.SPECTRAL_MASK,
-        help="reference extractor (default: spectral_mask)",
-    )
     reference.add_argument("--align", action=argparse.BooleanOptionalAction, default=True)
     reference.add_argument(
         "--center-extraction",
@@ -105,7 +99,6 @@ def main(argv: list[str] | None = None) -> int:
                 sigma=args.sigma,
                 auto_align=args.align,
                 language=args.lang,
-                algorithm=args.algorithm,
                 center_extraction=args.center_extraction,
                 weak_vocal_protection=args.weak_vocal_protection,
             )

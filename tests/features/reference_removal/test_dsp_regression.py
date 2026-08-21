@@ -1,13 +1,7 @@
-from functools import partial
-
 import numpy as np
 import pytest
 
-from features.reference_removal.dsp import align_audio
-from features.reference_removal.dsp import process_audio as _process_audio
-from shared.dsp import ReferenceAlgorithm
-
-process_audio = partial(_process_audio, algorithm=ReferenceAlgorithm.DIRECT)
+from features.reference_removal.dsp import align_audio, process_audio
 
 
 def correlation(first, second):

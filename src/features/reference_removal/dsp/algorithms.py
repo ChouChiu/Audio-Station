@@ -6,7 +6,7 @@ import mmap
 import numpy as np
 from scipy.ndimage import gaussian_filter, gaussian_filter1d, uniform_filter1d
 
-from shared.dsp import ReferenceAlgorithm, fft_frequencies, istft, stft
+from shared.dsp import fft_frequencies, istft, stft
 from shared.processing import CancellationToken
 
 _MASK_FLOOR = 0.05
@@ -28,47 +28,6 @@ def _release_mapped_pages(values: np.ndarray) -> None:
         mapping.flush()
         if hasattr(mapping, "madvise") and hasattr(mmap, "MADV_DONTNEED"):
             mapping.madvise(mmap.MADV_DONTNEED)
-
-
-def _fit_direct_matrix(song: np.ndarray, reference: np.ndarray) -> np.ndarray:
-    """Fit a robust real-valued stereo transfer without modifying the residual."""
-    epsilon = 1e-12
-    x = np.asarray(reference, dtype=np.float64)
-    y = np.asarray(song, dtype=np.float64)
-    x = x - np.mean(x, axis=1, keepdims=True)
-    y = y - np.mean(y, axis=1, keepdims=True)
-    reference_covariance = x @ x.T / max(x.shape[1], 1)
-    trace = float(np.trace(reference_covariance))
-    if not np.isfinite(trace) or trace < epsilon:
-        return np.zeros((y.shape[0], x.shape[0]), dtype=np.float64)
-
-    def solve(weights: np.ndarray | None = None) -> np.ndarray:
-        if weights is None:
-            weighted_x = x
-            weighted_y = y
-            weight_sum = x.shape[1]
-        else:
-            root = np.sqrt(weights)[None, :]
-            weighted_x = x * root
-            weighted_y = y * root
-            weight_sum = float(np.sum(weights))
-        covariance = weighted_x @ weighted_x.T / max(weight_sum, 1.0)
-        cross = weighted_y @ weighted_x.T / max(weight_sum, 1.0)
-        regularizer = 2e-4 * float(np.trace(covariance)) / max(x.shape[0], 1) + epsilon
-        loaded = covariance + regularizer * np.eye(x.shape[0])
-        return np.linalg.solve(loaded.T, cross.T).T
-
-    matrix = solve()
-    residual = y - matrix @ x
-    residual_energy = np.sum(residual * residual, axis=0)
-    scale = float(np.median(residual_energy)) + epsilon
-    # Down-weight vocal, cheer and transient peaks while estimating the reference
-    # path.  The final subtraction still operates directly on the untouched mix.
-    weights = np.minimum(1.0, 4.0 * scale / (residual_energy + epsilon))
-    matrix = solve(weights)
-    row_gain = np.sum(np.abs(matrix), axis=1)
-    matrix *= np.minimum(1.0, 2.0 / (row_gain + epsilon))[:, None]
-    return matrix
 
 
 def _smooth(values: np.ndarray, sigma_time: float, sigma_frequency: float = 1.0) -> np.ndarray:
@@ -184,129 +143,13 @@ def _phantom_center_enhance(
     )
 
 
-def _direct_reference_cancel(
-    song: np.ndarray,
-    reference: np.ndarray,
-    sample_rate: int,
-    strength: float,
-    sigma: float,
-    token: CancellationToken,
-) -> np.ndarray:
-    """Measure the legacy direct-reference residual without returning it to users.
-
-    Estimate only a slowly varying 2x2 real gain matrix, then subtract the
-    resulting reference waveform directly. The candidate can contain an
-    anti-reference when the reference has material absent from the mixture, so
-    callers must project its magnitude onto the original mixture before output.
-    """
-    length = min(song.shape[1], reference.shape[1])
-    mix = np.asarray(song[:, :length], dtype=np.float64)
-    accompaniment = np.asarray(reference[:, :length], dtype=np.float64)
-    if mix.shape[0] < 2 or accompaniment.shape[0] < 2:
-        matrix = _fit_direct_matrix(mix, accompaniment)
-        return mix - strength * (matrix @ accompaniment)
-
-    window = min(max(round(float(sigma) * sample_rate), 4096), length)
-    step = max(window // 3, 1)
-    positions: list[float] = []
-    matrices: list[np.ndarray] = []
-    for center in range(0, length, step):
-        token.raise_if_cancelled()
-        start = max(0, center - window // 2)
-        end = min(length, start + window)
-        start = max(0, end - window)
-        positions.append(float(center))
-        matrices.append(_fit_direct_matrix(mix[:, start:end], accompaniment[:, start:end]))
-    if positions[-1] != length - 1:
-        positions.append(float(length - 1))
-        matrices.append(_fit_direct_matrix(mix[:, -window:], accompaniment[:, -window:]))
-
-    transfer = np.asarray(matrices)
-    if transfer.shape[0] >= 3:
-        smoothed = transfer.copy()
-        for index in range(1, transfer.shape[0] - 1):
-            smoothed[index] = np.median(transfer[index - 1 : index + 2], axis=0)
-        transfer = smoothed
-
-    residual = mix.copy()
-    block_size = 262_144
-    for start in range(0, length, block_size):
-        token.raise_if_cancelled()
-        end = min(start + block_size, length)
-        samples = np.arange(start, end, dtype=np.float64)
-        for output_channel in range(mix.shape[0]):
-            predicted = np.zeros(end - start, dtype=np.float64)
-            for input_channel in range(accompaniment.shape[0]):
-                gain = np.interp(
-                    samples,
-                    positions,
-                    transfer[:, output_channel, input_channel],
-                )
-                predicted += gain * accompaniment[input_channel, start:end]
-            residual[output_channel, start:end] -= strength * predicted
-    return residual
-
-
-def _project_residual_onto_mixture(
-    mixture: np.ndarray,
-    candidate: np.ndarray,
-    sample_rate: int,
-    token: CancellationToken,
-) -> np.ndarray:
-    """Keep candidate attenuation while retaining only original-mixture spectra.
-
-    A direct residual ``Y - H X`` can synthesize ``-H X`` when the reference
-    contains an original lyric or instrument that is absent from the live mix.
-    Use that residual only to measure a linked attenuation mask, then reconstruct
-    from ``Y``. The output therefore cannot contain a reference-only spectrum or
-    its inverted-polarity form.
-    """
-    length = min(mixture.shape[1], candidate.shape[1])
-    original = np.asarray(mixture[:, :length], dtype=np.float64)
-    measured = np.asarray(candidate[:, :length], dtype=np.float64)
-    if np.array_equal(original, measured):
-        return original.copy()
-    n_fft = _analysis_fft_size(sample_rate)
-    hop = n_fft // 4
-    original_spectra = [
-        stft(channel, n_fft=n_fft, hop=hop).astype(np.complex64) for channel in original
-    ]
-    candidate_spectra = [
-        stft(channel, n_fft=n_fft, hop=hop).astype(np.complex64) for channel in measured
-    ]
-    token.raise_if_cancelled()
-    original_power = np.zeros(original_spectra[0].shape, dtype=np.float32)
-    candidate_power = np.zeros_like(original_power)
-    for original_channel, candidate_channel in zip(
-        original_spectra,
-        candidate_spectra,
-        strict=True,
-    ):
-        original_power += np.abs(original_channel) ** 2
-        candidate_power += np.abs(candidate_channel) ** 2
-    mask = np.sqrt(
-        np.clip(
-            candidate_power / (original_power + 1e-12),
-            _MASK_FLOOR**2,
-            1.0,
-        )
-    )
-    mask = gaussian_filter(mask, sigma=(0.35, 0.2), mode="reflect")
-    mask = np.clip(mask, _MASK_FLOOR, 1.0)
-    token.raise_if_cancelled()
-    return np.asarray(
-        [istft(channel * mask, hop=hop, length=length) for channel in original_spectra],
-        dtype=np.float64,
-    )
-
-
 def _analysis_fft_size(sample_rate: int) -> int:
     target = max(0.046 * sample_rate, 1.0)
     exponent = round(math.log2(target))
     return int(np.clip(2**exponent, 512, 4096))
 
 
-def _spectral_transfer_prediction(
+def _predict_reference_spectra(
     song_spectra: list[np.ndarray],
     reference_spectra: list[np.ndarray],
     sigma_frames: float,
@@ -338,7 +181,7 @@ def _spectral_transfer_prediction(
     return predicted
 
 
-def _spectral_mask_extract(
+def _reference_mask_cancel(
     song: np.ndarray,
     reference: np.ndarray,
     sample_rate: int,
@@ -346,7 +189,7 @@ def _spectral_mask_extract(
     sigma: float,
     token: CancellationToken,
 ) -> np.ndarray:
-    """Extract reference-independent content with a confidence-weighted soft mask.
+    """Cancel reference-correlated content with a confidence-weighted soft mask.
 
     The estimated complex reference transfer is used only to model accompaniment
     power. Reconstruction always multiplies the original mixture spectra by a
@@ -369,7 +212,7 @@ def _spectral_mask_extract(
         reference_spectra.append(reference_spectra[0])
     sigma_frames = max(float(sigma) * sample_rate / hop / 6.0, 1.0)
 
-    predicted = _spectral_transfer_prediction(
+    predicted = _predict_reference_spectra(
         song_spectra,
         reference_spectra,
         sigma_frames,
@@ -382,7 +225,7 @@ def _spectral_mask_extract(
     robust_weights = np.minimum(1.0, 4.0 * local_residual / (residual_power + 1e-12)).astype(
         np.float32
     )
-    predicted = _spectral_transfer_prediction(
+    predicted = _predict_reference_spectra(
         song_spectra,
         reference_spectra,
         sigma_frames,
@@ -471,7 +314,6 @@ def process_audio(
     token: CancellationToken | None = None,
     output: np.ndarray | None = None,
     *,
-    algorithm: ReferenceAlgorithm | str = ReferenceAlgorithm.SPECTRAL_MASK,
     center_extraction: bool = False,
     weak_vocal_protection: bool = False,
 ) -> np.ndarray:
@@ -480,7 +322,6 @@ def process_audio(
     accompaniment = np.asarray(reference, dtype=np.float32)
     if mix.ndim != 2 or accompaniment.ndim != 2 or sample_rate <= 0:
         raise ValueError("audio must have shape [channels, frames] and a positive sample rate")
-    selected_algorithm = ReferenceAlgorithm(algorithm)
     strength = float(np.clip(strength, 0.0, 1.0))
     length = min(mix.shape[1], accompaniment.shape[1])
     mix, accompaniment = mix[:, :length], accompaniment[:, :length]
@@ -500,30 +341,14 @@ def process_audio(
     for index, start in enumerate(starts):
         cancel.raise_if_cancelled()
         end = min(start + block, length)
-        if selected_algorithm == ReferenceAlgorithm.SPECTRAL_MASK:
-            processed = _spectral_mask_extract(
-                mix[:, start:end],
-                accompaniment[:, start:end],
-                sample_rate,
-                strength,
-                sigma,
-                cancel,
-            )
-        else:
-            candidate = _direct_reference_cancel(
-                mix[:, start:end],
-                accompaniment[:, start:end],
-                sample_rate,
-                strength,
-                sigma,
-                cancel,
-            )
-            processed = _project_residual_onto_mixture(
-                mix[:, start:end],
-                candidate,
-                sample_rate,
-                cancel,
-            )
+        processed = _reference_mask_cancel(
+            mix[:, start:end],
+            accompaniment[:, start:end],
+            sample_rate,
+            strength,
+            sigma,
+            cancel,
+        )
         if center_extraction:
             # Preserve the confirmed 75% enhancement sound while making the
             # strength slider continuous near bypass. Above 75%, only the core

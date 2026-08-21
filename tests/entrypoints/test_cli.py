@@ -3,22 +3,14 @@ import pytest
 from entrypoints.cli import build_parser
 
 
-def test_reference_command_defaults_to_spectral_mask_and_accepts_direct():
+def test_reference_command_has_no_algorithm_option():
     parser = build_parser()
     defaults = parser.parse_args(["mr", "song.wav", "reference.flac", "output.wav"])
-    direct = parser.parse_args(
-        ["mr", "song.wav", "reference.flac", "output.wav", "--algorithm", "direct"]
-    )
 
-    assert defaults.algorithm == "spectral_mask"
-    assert direct.algorithm == "direct"
-
-
-def test_reference_command_rejects_unknown_algorithm():
-    parser = build_parser()
+    assert not hasattr(defaults, "algorithm")
     with pytest.raises(SystemExit):
         parser.parse_args(
-            ["mr", "song.wav", "reference.flac", "output.wav", "--algorithm", "anything"]
+            ["mr", "song.wav", "reference.flac", "output.wav", "--algorithm", "direct"]
         )
 
 

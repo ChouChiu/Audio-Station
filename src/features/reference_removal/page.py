@@ -129,7 +129,6 @@ class MrPage(PageScrollArea):
         self.layout.addWidget(self.files)
 
         self.parameters = FormCard()
-        self.algorithm_label, self.algorithm = BodyLabel(), SmoothComboBox()
         self.sigma_label, self.sigma = BodyLabel(), SmoothComboBox()
         self.strength_label, self.strength_value = BodyLabel(), BodyLabel("75%")
         self.strength = Slider(Qt.Orientation.Horizontal)
@@ -146,7 +145,6 @@ class MrPage(PageScrollArea):
         self.weak_vocal_protection.setChecked(
             bool(cfg.weak_vocal_protection.value) and self.center_extraction.isChecked()
         )
-        self.parameters.add_row(self.algorithm_label, self.algorithm)
         self.parameters.add_row(self.sigma_label, self.sigma)
         self.parameters.add_row(self.strength_label, self.strength, self.strength_value, self.align)
         self.parameters.add_row(self.center_extraction_label, self.center_extraction)
@@ -273,7 +271,6 @@ class MrPage(PageScrollArea):
         self.acc_label.setText(tr(language, "acc_label"))
         self.output_label.setText(tr(language, "output_file"))
         self.output_edit.setPlaceholderText(tr(language, "output_name_hint"))
-        self.algorithm_label.setText(tr(language, "algorithm_label"))
         self.sigma_label.setText(tr(language, "reverb_label"))
         self.strength_label.setText(tr(language, "strength"))
         self.center_extraction_label.setText(tr(language, "center_extraction"))
@@ -303,16 +300,6 @@ class MrPage(PageScrollArea):
             self.preview_status.setText(tr(language, "preview_empty"))
         if self.progress.value() == 0:
             self.status.setText(tr(language, "ready"))
-        previous_algorithm = self.algorithm.currentData() or cfg.algorithm.value
-        self.algorithm.clear()
-        for value, key in (
-            ("spectral_mask", "algorithm_spectral_mask"),
-            ("direct", "algorithm_direct"),
-        ):
-            self.algorithm.addItem(tr(language, key), userData=value)
-        self.algorithm.setCurrentIndex(max(0, self.algorithm.findData(previous_algorithm)))
-        self.algorithm.setToolTip(tr(language, "algorithm_tip"))
-        self.algorithm_label.setToolTip(tr(language, "algorithm_tip"))
         previous_sigma = self.sigma.currentData() or cfg.sigma.value
         self.sigma.clear()
         for value, key in ((1, "sigma_0"), (3, "sigma_1"), (8, "sigma_2"), (16, "sigma_3")):
@@ -334,7 +321,6 @@ class MrPage(PageScrollArea):
             self.acc_button,
             self.output_button,
             self.output_edit,
-            self.algorithm,
             self.sigma,
             self.strength,
             self.align,

@@ -4,8 +4,6 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
-from shared.dsp import ReferenceAlgorithm
-
 
 class ClipKind(StrEnum):
     SONG = "song"
@@ -71,7 +69,6 @@ class FullStageJob:
     language: str = "zh_cn"
     include_fragments: bool = True
     auto_align: bool = True
-    algorithm: ReferenceAlgorithm | str = ReferenceAlgorithm.SPECTRAL_MASK
     center_extraction: bool = False
     weak_vocal_protection: bool = False
 
@@ -82,7 +79,6 @@ class FullStageJob:
             raise ValueError("strength must be in [0, 100]")
         if self.sigma not in {1, 3, 8, 16}:
             raise ValueError("sigma must be one of 1, 3, 8, 16")
-        object.__setattr__(self, "algorithm", ReferenceAlgorithm(self.algorithm))
         if self.weak_vocal_protection and not self.center_extraction:
             raise ValueError("weak vocal protection requires center extraction")
         resolved_stage = self.stage.expanduser().resolve()

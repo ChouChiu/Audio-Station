@@ -1,17 +1,11 @@
-from functools import partial
-
 import numpy as np
 import pytest
 from scipy.signal import fftconvolve
 
-from features.reference_removal.dsp import align_audio, alignment
-from features.reference_removal.dsp import process_audio as _process_audio
+from features.reference_removal.dsp import align_audio, alignment, process_audio
 from features.reference_removal.dsp.alignment import _spectral_flux_lag
 from shared.audio import create_pcm_audio
-from shared.dsp import ReferenceAlgorithm
 from shared.processing import CancellationToken, ProcessingCancelled
-
-process_audio = partial(_process_audio, algorithm=ReferenceAlgorithm.DIRECT)
 
 
 def corr(first, second):
@@ -180,7 +174,7 @@ def test_reference_cancellation_cancels_inverted_reference_then_enhances_center(
     assert 1.1 < center_gain < 1.3
 
 
-def test_reference_cancellation_defaults_to_plain_cancellation_without_spatial_extraction():
+def test_silent_reference_leaves_mix_nearly_bypassed():
     sample_rate = 16_000
     length = sample_rate * 2
     time = np.arange(length) / sample_rate
@@ -200,7 +194,9 @@ def test_reference_cancellation_defaults_to_plain_cancellation_without_spatial_e
         8,
     )
 
-    assert np.allclose(output, mixture, atol=1e-7)
+    assert corr(output[0], mixture[0]) > 0.999
+    assert corr(output[1], mixture[1]) > 0.999
+    assert np.sqrt(np.mean((output - mixture) ** 2)) < 0.05 * np.sqrt(np.mean(mixture**2))
 
 
 def test_bypass_and_cancellation(scene):
@@ -333,18 +329,22 @@ def test_process_audio_writes_supplied_disk_buffer(scene):
         target.cleanup()
 
 
-def test_spectral_mask_is_default_and_does_not_call_direct_subtraction(monkeypatch):
+def test_process_audio_uses_reference_mask_cancellation(monkeypatch):
     sample_rate = 8_000
     time = np.arange(sample_rate * 2) / sample_rate
     vocal = 0.3 * np.sin(2 * np.pi * 440 * time)
     reference = 0.2 * np.sin(2 * np.pi * 110 * time)
     mixture = np.stack([vocal + reference, 0.95 * vocal + reference])
+    from features.reference_removal.dsp import algorithms
 
+    calls = []
+    original = algorithms._reference_mask_cancel
     monkeypatch.setattr(
-        "features.reference_removal.dsp.algorithms._direct_reference_cancel",
-        lambda *_args, **_kwargs: pytest.fail("spectral default must not call direct subtraction"),
+        "features.reference_removal.dsp.algorithms._reference_mask_cancel",
+        lambda *args: calls.append(args) or original(*args),
     )
-    output = _process_audio(
+
+    output = process_audio(
         mixture,
         np.stack([reference, reference]),
         sample_rate,
@@ -352,11 +352,12 @@ def test_spectral_mask_is_default_and_does_not_call_direct_subtraction(monkeypat
         3,
     )
 
+    assert calls
     assert corr(output[0], vocal) > 0.99
     assert abs(corr(output[0], reference)) < 0.08
 
 
-def test_direct_residual_does_not_inject_reference_only_lyrics():
+def test_reference_mask_does_not_inject_reference_only_lyrics():
     sample_rate = 8_000
     length = sample_rate * 3
     time = np.arange(length) / sample_rate
@@ -369,13 +370,12 @@ def test_direct_residual_does_not_inject_reference_only_lyrics():
         [backing + reference_only_word, 0.92 * backing + reference_only_word]
     )
 
-    output = _process_audio(
+    output = process_audio(
         mixture,
         contaminated_reference,
         sample_rate,
         1.0,
         8,
-        algorithm=ReferenceAlgorithm.DIRECT,
     )
 
     old_word = np.stack([reference_only_word, reference_only_word])
@@ -390,7 +390,7 @@ def test_direct_residual_does_not_inject_reference_only_lyrics():
     assert live_word_gain > 0.7
 
 
-def test_spectral_mask_ignores_reference_polarity():
+def test_reference_mask_ignores_reference_polarity():
     sample_rate = 8_000
     rng = np.random.default_rng(130)
     reference = rng.normal(0.0, 0.08, (2, sample_rate * 2))
@@ -398,26 +398,26 @@ def test_spectral_mask_ignores_reference_polarity():
     vocal = np.stack([0.3 * np.sin(2 * np.pi * 431 * time)] * 2)
     mixture = vocal + np.asarray([[0.7, 0.2], [-0.1, 0.8]]) @ reference
 
-    normal = _process_audio(mixture, reference, sample_rate, 1.0, 3)
-    inverted = _process_audio(mixture, -reference, sample_rate, 1.0, 3)
+    normal = process_audio(mixture, reference, sample_rate, 1.0, 3)
+    inverted = process_audio(mixture, -reference, sample_rate, 1.0, 3)
 
     assert np.allclose(normal, inverted, atol=2e-5)
     assert corr(normal.ravel(), vocal.ravel()) > 0.95
 
 
-def test_spectral_mask_leaves_an_unrelated_reference_nearly_bypassed():
+def test_reference_mask_leaves_an_unrelated_reference_nearly_bypassed():
     sample_rate = 8_000
     rng = np.random.default_rng(131)
     mixture = rng.normal(0.0, 0.1, (2, sample_rate * 2))
     unrelated = rng.normal(0.0, 0.1, mixture.shape)
 
-    output = _process_audio(mixture, unrelated, sample_rate, 1.0, 3)
+    output = process_audio(mixture, unrelated, sample_rate, 1.0, 3)
 
     assert corr(output.ravel(), mixture.ravel()) > 0.999
     assert np.sqrt(np.mean((output - mixture) ** 2)) < 0.01
 
 
-def test_spectral_mask_handles_frequency_dependent_room_transfer_better_than_direct():
+def test_reference_mask_handles_frequency_dependent_room_transfer():
     sample_rate = 8_000
     length = sample_rate * 4
     rng = np.random.default_rng(140)
@@ -453,17 +453,8 @@ def test_spectral_mask_handles_frequency_dependent_room_transfer_better_than_dir
     vocal = np.stack([center, 0.95 * center])
     mixture = vocal + transferred
 
-    spectral = _process_audio(mixture, reference, sample_rate, 1.0, 3)
-    direct = _process_audio(
-        mixture,
-        reference,
-        sample_rate,
-        1.0,
-        3,
-        algorithm=ReferenceAlgorithm.DIRECT,
-    )
+    spectral = process_audio(mixture, reference, sample_rate, 1.0, 3)
 
     spectral_error = np.sqrt(np.mean((spectral - vocal) ** 2))
-    direct_error = np.sqrt(np.mean((direct - vocal) ** 2))
-    assert spectral_error < 0.97 * direct_error
-    assert corr(spectral.ravel(), vocal.ravel()) >= corr(direct.ravel(), vocal.ravel())
+    assert spectral_error < 0.05
+    assert corr(spectral.ravel(), vocal.ravel()) > 0.9

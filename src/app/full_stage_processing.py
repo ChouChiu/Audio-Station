@@ -78,8 +78,8 @@ def _alignment_quality(song: np.ndarray, reference: np.ndarray, sample_rate: int
 
     Full-stage matching already supplies a close source position.  A second drift
     alignment is useful for some broadcasts, but an uncertain local lag track can
-    make an already-correct match worse.  Compare both candidates with the same
-    small direct 2x2 fits used by reference cancellation and keep the robust median.
+    make an already-correct match worse.  Compare both candidates with small direct
+    2x2 fits and keep the robust median.
     """
     length = min(song.shape[1], reference.shape[1])
     window = min(max(4 * sample_rate, 4096), length)
@@ -126,9 +126,8 @@ def run_full_stage_job(
     progress: ProgressCallback = lambda _event: None,
 ) -> FullStageResult:
     logger.info(
-        "full-stage render settings: algorithm=%s strength=%d sigma=%d auto_align=%s "
+        "full-stage render settings: strength=%d sigma=%d auto_align=%s "
         "center_extraction=%s weak_vocal_protection=%s include_fragments=%s",
-        job.algorithm,
         job.strength,
         job.sigma,
         job.auto_align,
@@ -233,7 +232,6 @@ def run_full_stage_job(
                     job.sigma,
                     token,
                     processed_audio.samples,
-                    algorithm=job.algorithm,
                     center_extraction=job.center_extraction,
                     weak_vocal_protection=job.weak_vocal_protection,
                 )

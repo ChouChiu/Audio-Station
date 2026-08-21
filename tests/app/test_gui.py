@@ -32,13 +32,7 @@ def test_main_window_has_mr_workspace_with_two_subpages(qtbot):
     assert window.mr_workspace.stack.currentWidget() is window.full_stage
     window.mr_workspace.show_single()
     assert window.mr_workspace.stack.currentWidget() is window.mr
-    assert {
-        window.mr.algorithm.itemData(index) for index in range(window.mr.algorithm.count())
-    } == {
-        "spectral_mask",
-        "direct",
-    }
-    assert window.mr.algorithm.currentData() == cfg.algorithm.value
+    assert not hasattr(window.mr, "algorithm")
     window.mr.center_extraction.setChecked(False)
     assert not window.mr.weak_vocal_protection.isEnabled()
     window.mr.center_extraction.setChecked(True)
@@ -124,7 +118,6 @@ def test_full_stage_job_forwards_normal_mr_parameters(qtbot, tmp_path: Path):
     item.setData(Qt.ItemDataRole.UserRole, str(source))
     window.full_stage.sources.addItem(item)
     window.full_stage.align.setChecked(False)
-    window.full_stage.algorithm.setCurrentIndex(window.full_stage.algorithm.findData("direct"))
     window.full_stage.center_extraction.setChecked(True)
     window.full_stage.weak_vocal_protection.setChecked(True)
 
@@ -132,7 +125,6 @@ def test_full_stage_job_forwards_normal_mr_parameters(qtbot, tmp_path: Path):
 
     assert job is not None
     assert not job.auto_align
-    assert job.algorithm == "direct"
     assert job.center_extraction
     assert job.weak_vocal_protection
 
@@ -205,7 +197,6 @@ def test_reference_start_forwards_explicit_enhancement_switches(qtbot, tmp_path:
     window.mr.song_edit.setText(str(tmp_path / "song.wav"))
     window.mr.acc_edit.setText(str(tmp_path / "reference.wav"))
     window.mr.output_edit.setText(str(tmp_path / "output.wav"))
-    window.mr.algorithm.setCurrentIndex(window.mr.algorithm.findData("direct"))
     window.mr.center_extraction.setChecked(True)
     window.mr.weak_vocal_protection.setChecked(True)
     started = []
@@ -215,7 +206,6 @@ def test_reference_start_forwards_explicit_enhancement_switches(qtbot, tmp_path:
 
     assert len(started) == 1
     job = started[0].args[0]
-    assert job.algorithm == "direct"
     assert job.center_extraction
     assert job.weak_vocal_protection
 
