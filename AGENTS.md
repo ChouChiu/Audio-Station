@@ -4,7 +4,7 @@
 
 **Audio Station v1.0.0** (`audio-station`) — a desktop vocal/accompaniment separation tool written in Python 3.11+ / PySide6 with PySide6-Fluent-Widgets (Fluent Design UI). Three workflows share one codebase:
 
-- **MR Remove** (`audio-station mr`): reference-guided cancellation — takes a known accompaniment as reference, aligns it (GCC-PHAT + clock-drift tracking), and cancels it with one direct stereo 2×2 transfer estimate. Phantom-center focus is opt-in.
+- **MR Remove** (`audio-station mr`): reference-guided cancellation — takes a known accompaniment as reference, aligns it (GCC-PHAT + clock-drift tracking), and cancels it with a confidence-weighted reference mask. Phantom-center focus is opt-in.
 - **Full Stage** (GUI): matches multiple sources against a continuous stage recording, exposes an editable timeline, and applies reference cancellation only to enabled matched clips.
 - **AI vocal extraction** (`audio-station ai`): UVR MDX-Net ONNX inference with no reference; models download on demand and are verified by SHA-256.
 
@@ -36,7 +36,7 @@ Invariants enforced by `tests/test_architecture.py`: `shared` must never import 
 |---|---|
 | `src/entrypoints/` | `cli.py` (argparse: `mr`, `ai`, `--selftest`), `gui.py`, `__main__.py` (`python -m entrypoints`) |
 | `src/app/` | `main_window.py` (FluentWindow shell, 4 pages, worker orchestration), `worker.py` (QThread adapter), `version.py` |
-| `src/features/reference_removal/` | MR pipeline: `dsp/algorithms.py` (direct stereo cancellation), `dsp/alignment.py`, `finder.py` (auto accompaniment match), `processing.py`, `page.py`, `models.py` |
+| `src/features/reference_removal/` | MR pipeline: `dsp/algorithms.py` (reference-mask cancellation), `dsp/alignment.py`, `finder.py` (auto accompaniment match), `processing.py`, `page.py`, `models.py` |
 | `src/features/full_stage/` | Multi-source fingerprint matching, timeline models, and the full-stage page |
 | `src/features/neural_separation/` | AI pipeline: `inference.py` (MdxNet ONNX wrapper), `model_store.py` (search/download/verify), `catalog.py` (4 shipped model entries), `processing.py`, `page.py` |
 | `src/features/home/`, `src/features/settings/` | HomePage (brand + entry cards), SettingsPage (language/theme/log level) |
@@ -98,7 +98,7 @@ Language keys: `zh_cn`, `ja_jp`, `ko_kr`.
 | `src/shared/processing.py` | `CancellationToken`, `ProcessingCancelled`, `ProgressEvent`, `ProcessingResult`, `ProgressCallback` |
 | `src/shared/audio/io.py` | memmap audio loading, soxr resample, atomic WAV write (16/24-bit) |
 | `src/shared/config.py` / `i18n.py` / `logging.py` | settings persistence, `tr()`, single-line log format |
-| `src/features/reference_removal/dsp/algorithms.py` | Direct 2×2 reference cancellation, optional center focus, and linked peak protection |
+| `src/features/reference_removal/dsp/algorithms.py` | Reference-mask cancellation, optional center focus, and linked peak protection |
 | `src/features/reference_removal/dsp/alignment.py` | GCC-PHAT coarse alignment + local drift tracking + Lanczos warp |
 | `src/features/neural_separation/inference.py` / `model_store.py` | MdxNet ONNX wrapper (chunked overlap-add); model search/download/SHA-256 |
 | `src/resources/model_data.json` | 65-entry MDX-Net spec table keyed by model-MD5 (`compensate`, `mdx_dim_f_set`, `mdx_dim_t_set`, `mdx_n_fft_scale_set`, `primary_stem`) |
@@ -117,6 +117,6 @@ Language keys: `zh_cn`, `ja_jp`, `ko_kr`.
 ## Testing & QA
 
 - **Framework**: pytest ≥8.3 + pytest-qt ≥4.4. Run: `QT_QPA_PLATFORM=offscreen uv run --locked pytest` (offscreen mandatory; conftest sets it and adds `--runslow`, auto-skipping `@pytest.mark.slow` tests otherwise). Marker `model` is declared but currently unused; `--runslow` runs the 15-minute, 44.1 kHz stereo reference-cancellation benchmark (`tests/benchmarks/test_long_audio.py`) asserting seam smoothness and peak RSS ≤ 1.5 GiB.
-- **Layout**: `tests/` mirrors `src/` path-for-path. Per-area coverage: audio IO/resample/atomic-write (`tests/shared/test_audio.py`), STFT round-trip (`test_spectral.py`), i18n key parity (`test_i18n.py`), log format (`test_logging.py`), direct reference cancellation + alignment/MIMO (`tests/features/reference_removal/test_dsp.py`), drift/focus/jitter regressions (`test_dsp_regression.py`), finder similarity (`test_finder.py`), end-to-end reference job + AudioStats + same-input rejection (`test_processing.py`), neural chunked overlap-add identity (`test_neural.py`), CLI option handling (`tests/entrypoints/test_cli.py`), GUI navigation/theme/combos/stats via pytest-qt (`tests/app/test_gui.py`).
+- **Layout**: `tests/` mirrors `src/` path-for-path. Per-area coverage: audio IO/resample/atomic-write (`tests/shared/test_audio.py`), STFT round-trip (`test_spectral.py`), i18n key parity (`test_i18n.py`), log format (`test_logging.py`), reference-mask cancellation + alignment/MIMO (`tests/features/reference_removal/test_dsp.py`), drift/focus/jitter regressions (`test_dsp_regression.py`), finder similarity (`test_finder.py`), end-to-end reference job + AudioStats + same-input rejection (`test_processing.py`), neural chunked overlap-add identity (`test_neural.py`), CLI option handling (`tests/entrypoints/test_cli.py`), GUI navigation/theme/combos/stats via pytest-qt (`tests/app/test_gui.py`).
 - **Architecture gate**: `tests/test_architecture.py` parses ASTs — any `shared → app/features` or feature↔feature import fails the suite.
 - **Expectations**: synthetic DSP metrics are regression evidence only — they do not claim real-music quality (stated in README). Run `uv run --locked audio-station --selftest` for a quick pipeline smoke check before committing DSP changes.
