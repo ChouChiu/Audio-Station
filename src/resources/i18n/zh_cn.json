@@ -8,6 +8,7 @@
   "browse": "浏览...",
   "auto_find_on": "自动查找: 开",
   "auto_find_off": "自动查找: 关",
+  "params": "参数设置",
   "reverb_label": "参考增益跟踪窗口:",
   "sigma_0": "1 秒 (快速变化)",
   "sigma_1": "3 秒 (一般现场)",

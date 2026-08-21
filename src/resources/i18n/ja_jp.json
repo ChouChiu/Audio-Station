@@ -8,6 +8,7 @@
   "browse": "参照...",
   "auto_find_on": "自動検索: オン",
   "auto_find_off": "自動検索: オフ",
+  "params": "パラメータ設定",
   "reverb_label": "参照ゲイン追跡窓:",
   "sigma_0": "1 秒 (高速変化)",
   "sigma_1": "3 秒 (一般ライブ)",

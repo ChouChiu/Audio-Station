@@ -8,6 +8,7 @@
   "browse": "찾아보기...",
   "auto_find_on": "자동 탐색: 켜짐",
   "auto_find_off": "자동 탐색: 꺼짐",
+  "params": "파라미터 설정",
   "reverb_label": "레퍼런스 게인 추적 창:",
   "sigma_0": "1초 (빠른 변화)",
   "sigma_1": "3초 (일반 라이브)",
